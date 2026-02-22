@@ -1,0 +1,13 @@
+[
+  {
+    "video_file": "file:///media/andreas/Seagate Expansion Drive/Videos/Fussballverein Wurgwitz/Testspiel 22.02.2026/DJI Osmo Action5 Pro/DJI_20260222110831_0007_D_yt.MP4",
+    "frame_index": 0,
+    "timestamp_ms": 0,
+    "position": {
+      "x": 477.0,
+      "y": 306.0
+    },
+    "radius": 0.12028266426101338,
+    "type": "manual"
+  }
+]
