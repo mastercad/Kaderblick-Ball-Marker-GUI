@@ -10,6 +10,7 @@ Markiere die Ballposition in Fußball-Videoaufnahmen — Frame für Frame, unter
 - **Ball markieren** per Klick ins Bild — die Position wird pro Frame gespeichert
 - **Automatische Ballerkennung (YOLO)** — erkennt den Ball automatisch, entweder im aktuellen Frame oder auf allen Frames gleichzeitig
 - **Interpolation** — füllt die Lücken zwischen zwei gesetzten Markern automatisch auf
+- **Feldkalibrierung** — interaktives Erstellen und Verwalten von Spielfeldmarkierungen pro Kameraseite (Feldrand, Mittellinie, Mittelkreis, Strafraum), inkl. Import/Export
 - **Export & Import** — alle Markierungen als JSON speichern und später wieder laden
 - **Autosave** — die Arbeit wird laufend im Hintergrund gesichert, damit nichts verloren geht
 
@@ -71,6 +72,10 @@ Springen: **Ctrl + →** (vorwärts) / **Ctrl + ←** (rückwärts), oder mit de
 | Alle Frames erkennen | `Ctrl + Shift + D` | Werkzeuge → Alle Frames erkennen |
 | Marker interpolieren | `Ctrl + I` | Werkzeuge → Marker interpolieren |
 | Marker zurücksetzen | — | Werkzeuge → Marker zurücksetzen… |
+| Feldkalibrierung erstellen/bearbeiten | — | Werkzeuge → Feldkalibrierung erstellen/bearbeiten… |
+| Feldkalibrierung laden | — | Werkzeuge → Feldkalibrierung laden… |
+| Feldkalibrierung exportieren | — | Werkzeuge → Feldkalibrierung exportieren… |
+| Feldgrenze entfernen | — | Werkzeuge → Feldgrenze entfernen |
 | Rückgängig / Wiederholen | `Ctrl + Z` / `Ctrl + Y` | Datei → Undo / Redo |
 | Exportieren | `Ctrl + S` | Datei → Exportieren… |
 | Importieren | `Ctrl + O` | Datei → Importieren… |
@@ -157,6 +162,93 @@ Ball-Marker (`manual`, `yolo`, `interpolated`) und Ausschluss-Marker werden **ge
 4. `Ctrl + I` drücken — die Lücken werden aufgefüllt.
 5. Im Dropdown „⚪ Lücke" wählen und mit Ctrl + → durch verbleibende Lücken springen.
 6. Fehlende Stellen nachmarkieren und ggf. erneut interpolieren.
+
+---
+
+## Feldkalibrierung
+
+Die Feldkalibrierung definiert die sichtbaren Spielfeldgrenzen und -markierungen für jede Kameraseite. Sie wird von der YOLO-Erkennung genutzt, um Detektionen außerhalb des Spielfelds automatisch zu verwerfen — das reduziert Fehlerkennungen deutlich.
+
+### Dual-Kamera-Setup
+
+Jede Kamera sieht nur **eine Hälfte** des Spielfelds:
+
+| Kamera | Sichtbereich | Sichtbare Elemente |
+|--------|--------------|---------------------|
+| Kamera 0 (Links) | Linke Spielfeldhälfte | Linkes Tor, linker Strafraum, linke Hälfte Mittelkreis, Mittellinie am rechten Bildrand |
+| Kamera 1 (Rechts) | Rechte Spielfeldhälfte | Rechtes Tor, rechter Strafraum, rechte Hälfte Mittelkreis, Mittellinie am linken Bildrand |
+
+Die Kalibrierungsdaten beider Kameras werden gemeinsam in einer JSON-Datei gespeichert (`data/field_calibration.json`) unter den Schlüsseln `cam0` und `cam1`.
+
+### Kalibrierung erstellen
+
+1. Video laden (mindestens ein Panel)
+2. **Werkzeuge → Feldkalibrierung erstellen/bearbeiten…** wählen
+3. Im Dialog öffnet sich der aktuelle Videoframe als Kalibrierungsbild
+4. Je nach Kameraseite werden die passenden Modi angeboten:
+
+| Schritt | Modus | Was markieren? |
+|---------|-------|----------------|
+| 1 | **Spielfeldrand** | Entlang der sichtbaren Außenlinie klicken (mind. 4 Punkte, mehr für Fischauge) |
+| 2 | **Mittellinie** | Entlang der Mittellinie klicken (mind. 2 Punkte) |
+| 3 | **Mittelkreis** | Punkte entlang des sichtbaren Halbkreises setzen |
+| 4 | **Strafraum** | 4 Ecken des Strafraums im Uhrzeigersinn |
+
+### Bedienung im Kalibrierungsdialog
+
+| Aktion | Bedienung |
+|--------|----------|
+| Punkt setzen | Linksklick |
+| Punkt auf Linie einfügen | Doppelklick nahe einer Verbindungslinie |
+| Punkt entfernen | Rechtsklick auf den Punkt |
+| Punkt verschieben | Punkt anklicken und ziehen |
+| Letzten Punkt entfernen | `Z` oder Button |
+| Nächster Modus | `Enter` / `N` oder Button |
+| Vorheriger Modus | `B` oder Button |
+| Zoom | Mausrad |
+| Bild verschieben | Mittlere Maustaste |
+| Bild einpassen | `0` oder ⊞ Button |
+| Kameraseite wechseln | Dropdown oben links |
+
+### Tipps für die Kalibrierung
+
+- **Fischauge-Korrektur**: Bei Weitwinkelkameras (z. B. 155°) sind die Spielfeldlinien gekrümmt. Setze **viele Punkte** entlang der Kurven, damit die Grenze genauer abgebildet wird.
+- **Punkt einfügen**: Per Doppelklick nahe einer Verbindungslinie wird ein neuer Punkt zwischen den beiden nächsten Eckpunkten eingefügt – ideal zum Nachbessern von Kurven.
+- **Punkt entfernen**: Rechtsklick auf einen bestehenden Punkt entfernt diesen sofort.
+- **Punkte verschieben**: Alle gesetzten Punkte können nachträglich per Drag & Drop verschoben werden.
+- **Modus leeren**: Falls du einen Modus komplett neu machen willst, nutze den „Modus leeren" Button.
+- Die Kalibrierung wird automatisch gespeichert und beim nächsten Start wiederhergestellt.
+
+### Import / Export
+
+- **Kalibrierung importieren**: Im Dialog über „📂 Kalibrierung importieren…" eine bestehende `field_calibration.json` laden.
+- **Kalibrierung exportieren**: Im Dialog über „💾 Kalibrierung exportieren…" oder im Hauptmenü über „Werkzeuge → Feldkalibrierung exportieren…".
+- Das Dateiformat ist kompatibel mit dem externen `manual_field_calibration.py`-Tool — bestehende Kalibrierungen können direkt übernommen werden.
+
+### Datenformat
+
+Die JSON-Datei enthält pro Kamera einen Eintrag:
+
+```json
+{
+  "cam0": {
+    "field_boundary": [[x1, y1], [x2, y2], ...],
+    "center_line": [[x1, y1], [x2, y2], ...],
+    "center_half_ellipse_points": [[x1, y1], ...],
+    "penalty_area_left": [[x1, y1], ...],
+    "frame_width": 3840,
+    "frame_height": 2160,
+    "video_path": "/pfad/zum/video.mp4",
+    "camera_id": 0
+  },
+  "cam1": {
+    "field_boundary": [...],
+    "center_line": [...],
+    "penalty_area_right": [...],
+    ...
+  }
+}
+```
 
 ---
 

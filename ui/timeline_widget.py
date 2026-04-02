@@ -11,6 +11,7 @@ class TimelineWidget(QWidget):
         self.right_panel = right_panel
         self.setMinimumHeight(80)
         self.selected_frame = 0
+        self.sync_offset = 0  # Frame-Offset für rechtes Video
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -46,5 +47,5 @@ class TimelineWidget(QWidget):
             if hasattr(self.left_panel, 'set_frame'):
                 self.left_panel.set_frame(self.selected_frame)
             if hasattr(self.right_panel, 'set_frame'):
-                self.right_panel.set_frame(self.selected_frame)
+                self.right_panel.set_frame(self.selected_frame + self.sync_offset)
             self.update()

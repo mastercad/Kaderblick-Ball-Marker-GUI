@@ -5,7 +5,7 @@ from collections import defaultdict
 from model.marker import Marker
 
 
-def _build_export_data(markers):
+def _build_export_data(markers, sync_offset_frames=0):
     """Baut die hierarchische Export-Struktur: gruppiert nach Video → Frame."""
     by_video = defaultdict(lambda: defaultdict(list))
     for m in markers:
@@ -33,12 +33,15 @@ def _build_export_data(markers):
             "video_file": video_file,
             "frames": frame_list,
         })
-    return {"version": 1, "videos": videos}
+    result = {"version": 1, "videos": videos}
+    if sync_offset_frames:
+        result["sync_offset_frames"] = sync_offset_frames
+    return result
 
 
-def export_markers(markers, filename):
+def export_markers(markers, filename, sync_offset_frames=0):
     """Exportiert alle Marker als strukturierte JSON-Datei. Gibt den finalen Dateipfad zurück."""
-    data = _build_export_data(markers)
+    data = _build_export_data(markers, sync_offset_frames=sync_offset_frames)
     filename = str(filename)
     if not os.path.splitext(filename)[1]:
         filename += ".json"

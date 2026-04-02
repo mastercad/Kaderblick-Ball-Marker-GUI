@@ -54,6 +54,10 @@ class VideoGraphicsPanel(QWidget):
         self.player.setVideoOutput(self.video_item)
         self.markers = []  # Marker-Objekte
         self.marker_items = {}  # Marker-Objekt -> QGraphicsEllipseItem
+        self._frame_to_items: dict[int, list[tuple]] = {}  # frame_index -> [(marker, item)]
+        self._last_visible_frame: int | None = None  # zuletzt angezeigte Frame-Nr
+        self._stats_cache: str | None = None  # gecachte Statistik-HTML (invalidiert bei Marker-Änderung)
+        self._stats_counts: dict | None = None  # gecachte Zähler {manual, yolo, interpolated, exclusion, total}
         self._zoom_level = 1.0  # Aktueller Zoom-Faktor
         self._panning = False   # Panning-Modus aktiv?
         self._pan_start = QPointF()
@@ -124,6 +128,15 @@ class VideoGraphicsPanel(QWidget):
         # Seek-Schutz: Marker erst anzeigen wenn das Videobild gerendert wurde
         self._seeking = False
         self.player.videoSink().videoFrameChanged.connect(self._on_video_frame_changed)
+
+        # Playback-State: Marker nach Pause/Stop aktualisieren
+        self.player.playbackStateChanged.connect(self._on_playback_state_changed)
+
+        # ── Playback-Refresh-Timer ──
+        # Während der Wiedergabe steuert dieser Timer die View-Repaints,
+        # statt Qt bei jedem dekodierten Frame die gesamte Scene rendern zu lassen.
+        self._playback_refresh_timer = QTimer(self)
+        self._playback_refresh_timer.timeout.connect(self._playback_refresh_tick)
 
     # ── YOLO-Ballerkennung ────────────────────────────────────────
 
@@ -368,6 +381,7 @@ class VideoGraphicsPanel(QWidget):
             item = self._create_marker_item(marker)
             self.markers.append(marker)
             self.marker_items[marker] = item
+            self._index_add(marker, item)
             if hasattr(self.session, 'add_marker'):
                 self.session.add_marker(marker)
             self.status_message.emit(f"Ball erkannt – Marker gesetzt (Frame {frame_idx})")
@@ -611,6 +625,7 @@ class VideoGraphicsPanel(QWidget):
             item = self._create_marker_item(marker)
             self.markers.append(marker)
             self.marker_items[marker] = item
+            self._index_add(marker, item)
             self.session.markers.append(marker)
             self._batch_existing_frames.add(frame_idx)
 
@@ -670,6 +685,7 @@ class VideoGraphicsPanel(QWidget):
             m = yolo_markers[f]
             if m in self.marker_items:
                 item = self.marker_items.pop(m)
+                self._index_remove(m, item)
                 self.scene.removeItem(item)
             if m in self.markers:
                 self.markers.remove(m)
@@ -859,11 +875,24 @@ class VideoGraphicsPanel(QWidget):
 
     def play(self):
         if self.has_video:
+            # View-Repaints kontrollieren: Qt darf nicht bei jedem dekodierten
+            # Frame die komplette QGraphicsScene (inkl. aller Kind-Items) rendern.
+            self.view.setViewportUpdateMode(
+                QGraphicsView.ViewportUpdateMode.NoViewportUpdate)
+            self._hide_all_markers()
             self.player.play()
+            # Eigener Timer steuert Repaints mit ~24fps
+            self._playback_refresh_timer.start(42)
 
     def pause(self):
         if self.has_video:
+            self._playback_refresh_timer.stop()
             self.player.pause()
+            # View-Updates wieder normal aktivieren
+            self.view.setViewportUpdateMode(
+                QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate)
+            self.view.viewport().update()
+            self._update_marker_visibility(self.current_frame())
 
     def toggle_play(self):
         if not self.has_video:
@@ -1135,9 +1164,12 @@ class VideoGraphicsPanel(QWidget):
 
     def _on_position_changed(self, position):
         """Update Frame-Label und Marker-Sichtbarkeit bei Positionsänderung."""
+        # Während Playback: Timer übernimmt alles
+        if self._playback_refresh_timer.isActive():
+            return
         frame = round(position / self.ms_per_frame) if self.has_video else 0
         self._frame_label.setText(f"Frame: {frame}")
-        # Während eines Seeks keine Marker anzeigen – das macht der Timer
+        # Während eines Seeks keine Marker anzeigen – das macht _on_video_frame_changed
         if not self._seeking:
             self._update_marker_visibility(frame)
 
@@ -1175,19 +1207,69 @@ class VideoGraphicsPanel(QWidget):
 
     def _hide_all_markers(self):
         """Versteckt alle Marker-Items sofort."""
-        for item in self.marker_items.values():
-            item.setVisible(False)
+        if self._last_visible_frame is not None:
+            for _marker, item in self._frame_to_items.get(self._last_visible_frame, []):
+                item.setVisible(False)
+            self._last_visible_frame = None
 
     def _on_video_frame_changed(self):
         """Wird aufgerufen wenn ein neues Videobild dekodiert wurde."""
+        # Während Playback: ignorieren (Refresh-Timer übernimmt)
+        if self._playback_refresh_timer.isActive():
+            return
         if self._seeking:
             self._seeking = False
+            self._update_marker_visibility(self.current_frame())
+
+    def _playback_refresh_tick(self):
+        """Kontrollierter View-Repaint während der Wiedergabe (~24fps)."""
+        if not self.is_playing:
+            # Wiedergabe ist extern beendet worden (z.B. Ende des Videos)
+            self._playback_refresh_timer.stop()
+            self.view.setViewportUpdateMode(
+                QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate)
+            self._update_marker_visibility(self.current_frame())
+            return
+        # Frame-Label aktualisieren
+        frame = self.current_frame()
+        self._frame_label.setText(f"Frame: {frame}")
+        # Nur das Viewport-Widget neu zeichnen (ohne Scene-Traversal)
+        self.view.viewport().update()
+
+    def _on_playback_state_changed(self, state):
+        """Nach Stopp oder Pause: Marker-Sichtbarkeit aktualisieren."""
+        if state != QMediaPlayer.PlaybackState.PlayingState:
+            # Aufräumen falls der Timer noch läuft (z.B. Video-Ende)
+            if self._playback_refresh_timer.isActive():
+                self._playback_refresh_timer.stop()
+                self.view.setViewportUpdateMode(
+                    QGraphicsView.ViewportUpdateMode.MinimalViewportUpdate)
+            self.view.viewport().update()
             self._update_marker_visibility(self.current_frame())
 
     def total_frames(self):
         if self.player is not None and self.player.duration() > 0:
             return int(self.player.duration() / self.ms_per_frame)
         return 1
+
+    def load_video(self, filepath: str) -> bool:
+        """Lädt ein Video programmatisch (ohne Datei-Dialog). Gibt True bei Erfolg zurück."""
+        from PySide6.QtCore import QUrl
+        if not filepath or not os.path.isfile(filepath):
+            return False
+        self.player.setSource(QUrl.fromLocalFile(filepath))
+        self.player.setPosition(0)
+        self.player.pause()
+        self._zoom_level = 1.0
+        self._fps_detector.detect_from_file(filepath)
+        resolution = self._detect_video_resolution(filepath)
+        if resolution:
+            self.video_loaded.emit(resolution)
+        self._ensure_keyframes()
+        main_window = self._find_main_window()
+        if main_window:
+            main_window.update_undo_redo_actions()
+        return True
 
     def open_video(self):
         from PySide6.QtWidgets import QFileDialog
@@ -1302,6 +1384,7 @@ class VideoGraphicsPanel(QWidget):
                         if item.scene():
                             item.scene().removeItem(item)
                         del self.marker_items[m]
+                        self._index_remove(m, item)
                         if m in self.markers:
                             self.markers.remove(m)
                         if hasattr(self.session, 'remove_marker'):
@@ -1339,6 +1422,7 @@ class VideoGraphicsPanel(QWidget):
                     item = self._create_marker_item(marker)
                     self.markers.append(marker)
                     self.marker_items[marker] = item
+                    self._index_add(marker, item)
                     if hasattr(self.session, 'add_marker'):
                         self.session.add_marker(marker)
                     # Batch-Erkennung: Frame als bereits markiert registrieren
@@ -1433,14 +1517,55 @@ class VideoGraphicsPanel(QWidget):
         for marker in self.markers:
             item = self._create_marker_item(marker)
             self.marker_items[marker] = item
+        self._rebuild_frame_index()
+        self._invalidate_stats_cache()
         # Sichtbarkeit nach aktuellem Frame aktualisieren
         self._update_marker_visibility(self.current_frame())
         self.markers_changed.emit()
 
-    def _update_marker_visibility(self, frame):
-        """Zeigt nur Marker an, die zum aktuellen Frame gehören."""
+    def _rebuild_frame_index(self):
+        """Baut den Frame-Index komplett neu auf (nach sync/bulk-Operationen)."""
+        self._frame_to_items = {}
         for marker, item in self.marker_items.items():
-            item.setVisible(marker.frame_index == frame)
+            f = marker.frame_index
+            if f not in self._frame_to_items:
+                self._frame_to_items[f] = []
+            self._frame_to_items[f].append((marker, item))
+        self._last_visible_frame = None
+
+    def _index_add(self, marker, item):
+        """Fügt einen Marker zum Frame-Index hinzu."""
+        f = marker.frame_index
+        if f not in self._frame_to_items:
+            self._frame_to_items[f] = []
+        self._frame_to_items[f].append((marker, item))
+        self._invalidate_stats_cache()
+
+    def _index_remove(self, marker, item):
+        """Entfernt einen Marker aus dem Frame-Index."""
+        f = marker.frame_index
+        entries = self._frame_to_items.get(f)
+        if entries:
+            entries[:] = [(m, i) for m, i in entries if m is not marker]
+            if not entries:
+                del self._frame_to_items[f]
+        self._invalidate_stats_cache()
+
+    def _invalidate_stats_cache(self):
+        """Markiert den Statistik-Cache als ungültig."""
+        self._stats_cache = None
+        self._stats_counts = None
+
+    def _update_marker_visibility(self, frame):
+        """Zeigt nur Marker an, die zum aktuellen Frame gehören (O(1)-Lookup)."""
+        # Vorherigen Frame ausblenden
+        if self._last_visible_frame is not None and self._last_visible_frame != frame:
+            for _marker, item in self._frame_to_items.get(self._last_visible_frame, []):
+                item.setVisible(False)
+        # Aktuellen Frame einblenden
+        for _marker, item in self._frame_to_items.get(frame, []):
+            item.setVisible(True)
+        self._last_visible_frame = frame
         self._update_stats_label(frame)
 
     # ── Marker auf aktuellem Frame hervorheben / anspringen ─────────
@@ -1542,34 +1667,51 @@ class VideoGraphicsPanel(QWidget):
         self._highlight_items.clear()
 
     def _update_stats_label(self, frame):
-        """Aktualisiert die Marker-Statistik unter dem Frame-Label."""
+        """Aktualisiert die Marker-Statistik unter dem Frame-Label (mit Cache)."""
         if not self.has_video:
             self._stats_label.setText("")
             return
-        video_id = self.player.source().toString()
-        video_markers = [m for m in self.session.markers if m.video_file == video_id]
-        total = len(video_markers)
-        if total == 0:
+        # Gesamt-Statistik nur neu berechnen wenn Cache ungültig
+        if self._stats_counts is None:
+            n_manual = n_yolo = n_interp = n_excl = 0
+            for m in self.markers:
+                t = m.type
+                if t == "manual":
+                    n_manual += 1
+                elif t == "yolo":
+                    n_yolo += 1
+                elif t == "interpolated":
+                    n_interp += 1
+                elif t == "exclusion":
+                    n_excl += 1
+            self._stats_counts = {
+                "manual": n_manual, "yolo": n_yolo,
+                "interpolated": n_interp, "exclusion": n_excl,
+                "total": n_manual + n_yolo + n_interp + n_excl,
+            }
+            # Basis-HTML ohne Frame-Info cachen
+            excl_info = (
+                f'&nbsp;&nbsp;<span style="color:#555">\u25cf</span>&nbsp;{n_excl} Ausschluss'
+                if n_excl else ''
+            )
+            self._stats_cache = (
+                f'<span style="color:#d00">\u25cf</span>&nbsp;{n_manual} manuell'
+                f'&nbsp;&nbsp;<span style="color:#0078ff">\u25cf</span>&nbsp;{n_yolo} YOLO'
+                f'&nbsp;&nbsp;<span style="color:#ffa500">\u25cf</span>&nbsp;{n_interp} interpoliert'
+                f'{excl_info}'
+                f'&nbsp;&nbsp;= {self._stats_counts["total"]} gesamt'
+            )
+        if self._stats_counts["total"] == 0:
             self._stats_label.setText("Keine Marker")
             return
-        n_manual = sum(1 for m in video_markers if m.type == "manual")
-        n_yolo = sum(1 for m in video_markers if m.type == "yolo")
-        n_interp = sum(1 for m in video_markers if m.type == "interpolated")
-        n_excl = sum(1 for m in video_markers if m.type == "exclusion")
-        # Marker auf aktuellem Frame
-        frame_markers = [m for m in video_markers if m.frame_index == frame]
-        frame_info = ""
-        if frame_markers:
-            types = ", ".join(m.type for m in frame_markers)
-            frame_info = f"  |  Frame: {len(frame_markers)} ({types})"
-        excl_info = f'&nbsp;&nbsp;<span style="color:#555">\u25cf</span>&nbsp;{n_excl} Ausschluss' if n_excl else ''
-        self._stats_label.setText(
-            f'<span style="color:#d00">\u25cf</span>&nbsp;{n_manual} manuell'
-            f'&nbsp;&nbsp;<span style="color:#0078ff">\u25cf</span>&nbsp;{n_yolo} YOLO'
-            f'&nbsp;&nbsp;<span style="color:#ffa500">\u25cf</span>&nbsp;{n_interp} interpoliert'
-            f'{excl_info}'
-            f'&nbsp;&nbsp;= {total} gesamt{frame_info}'
-        )
+        # Frame-Info aus Index (O(1))
+        frame_entries = self._frame_to_items.get(frame, [])
+        if frame_entries:
+            types = ", ".join(m.type for m, _item in frame_entries)
+            frame_info = f"  |  Frame: {len(frame_entries)} ({types})"
+        else:
+            frame_info = ""
+        self._stats_label.setText(self._stats_cache + frame_info)
 
     # ── Zoom & Pan ────────────────────────────────────────────────────
 

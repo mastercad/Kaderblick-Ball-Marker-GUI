@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=BallMarker GUI
+Comment=Fußball-Videoanalyse – Ballpositionen markieren und exportieren
+Exec=python3 main.py
+Icon=ballmarker-gui
+Terminal=false
+Categories=Video;AudioVideo;Utility;
+StartupWMClass=ballmarker-gui

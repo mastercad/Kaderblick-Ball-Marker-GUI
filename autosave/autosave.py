@@ -12,15 +12,17 @@ _AUTOSAVE_INTERVAL = 15
 # ── Zentrale Pfade für alle Laufzeitdaten ─────────────────────
 _DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 AUTOSAVE_SESSION_PATH = os.path.join(_DATA_DIR, "session.json")
-AUTOSAVE_FIELD_CAL_PATH = os.path.join(_DATA_DIR, "field_calibration_state.json")
+DEFAULT_FIELD_CALIBRATION_PATH = os.path.join(_DATA_DIR, "field_calibration.json")
 DEFAULT_EXPORT_DIR = _DATA_DIR
 
 
 class Autosave:
-    def __init__(self, session):
+    def __init__(self, session, get_video_paths=None, get_sync_offset=None):
         self.session = session
         self.running = False
         self._last_marker_count = 0
+        self._get_video_paths = get_video_paths  # Callback: () -> [str, str]
+        self._get_sync_offset = get_sync_offset  # Callback: () -> int
 
     def start(self):
         self.running = True
@@ -35,48 +37,55 @@ class Autosave:
             self.save()
 
     def save(self):
-        """Speichert die aktuelle Session atomar (tmp + rename)."""
+        """Speichert die aktuelle Session atomar (Marker + Videopfade)."""
         try:
-            path = self.session.autosave_path
+            path = str(self.session.autosave_path)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            export_markers(self.session.markers, path)
+
+            # Marker-Daten aufbauen
+            from export.exporter import _build_export_data
+            data = _build_export_data(self.session.markers)
+
+            # Videopfade separat speichern (unabhängig von Markern)
+            if self._get_video_paths:
+                data["loaded_videos"] = self._get_video_paths()
+
+            # Sync-Offset speichern
+            if self._get_sync_offset:
+                offset = self._get_sync_offset()
+                if offset:
+                    data["sync_offset_frames"] = offset
+
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, path)
             self._last_marker_count = len(self.session.markers)
         except Exception as e:
             print(f"[Autosave] Fehler beim Speichern: {e}")
 
-    # ── Feldkalibrierung persistieren ─────────────────────────────
-
-    def save_field_calibration_path(self, cal_path: str | None):
-        """Speichert den Pfad zur Feldkalibrierungsdatei."""
-        try:
-            os.makedirs(os.path.dirname(AUTOSAVE_FIELD_CAL_PATH), exist_ok=True)
-            if cal_path:
-                data = {"field_calibration_path": cal_path}
-                tmp = AUTOSAVE_FIELD_CAL_PATH + ".tmp"
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False)
-                os.replace(tmp, AUTOSAVE_FIELD_CAL_PATH)
-            else:
-                if os.path.isfile(AUTOSAVE_FIELD_CAL_PATH):
-                    os.remove(AUTOSAVE_FIELD_CAL_PATH)
-        except Exception as e:
-            print(f"[Autosave] Feldkalibrierung-State Fehler: {e}")
-
-    def load_field_calibration_path(self) -> str | None:
-        """Lädt den gespeicherten Pfad zur Feldkalibrierungsdatei."""
-        try:
-            if not os.path.isfile(AUTOSAVE_FIELD_CAL_PATH):
-                return None
-            with open(AUTOSAVE_FIELD_CAL_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data.get("field_calibration_path")
-        except Exception as e:
-            print(f"[Autosave] Feldkalibrierung-State lesen Fehler: {e}")
-            return None
-
     def has_recovery(self) -> bool:
-        """Prüft ob eine Autosave-Datei vorhanden ist."""
-        return os.path.isfile(self.session.autosave_path)
+        """Prüft ob eine Autosave-Datei vorhanden ist und Daten enthält."""
+        if not os.path.isfile(self.session.autosave_path):
+            return False
+        try:
+            with open(self.session.autosave_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Recovery anbieten wenn Videos oder Marker vorhanden
+            has_videos = bool(data.get("loaded_videos", []))
+            has_markers = bool(data.get("videos", []))
+            return has_videos or has_markers
+        except Exception:
+            return False
+
+    def load_session_data(self) -> dict:
+        """Lädt die komplette Session-Datei als dict."""
+        try:
+            with open(self.session.autosave_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[Autosave] Fehler beim Lesen: {e}")
+            return {}
 
     def recover(self):
         """Stellt Marker aus der Autosave-Datei wieder her. Gibt die geladenen Marker zurück."""
@@ -88,14 +97,9 @@ class Autosave:
             return []
 
     def clear(self):
-        """Löscht die Autosave-Datei und den Feldkalibrierungs-State."""
+        """Löscht die Autosave-Datei."""
         try:
             if os.path.isfile(self.session.autosave_path):
                 os.remove(self.session.autosave_path)
-        except Exception:
-            pass
-        try:
-            if os.path.isfile(AUTOSAVE_FIELD_CAL_PATH):
-                os.remove(AUTOSAVE_FIELD_CAL_PATH)
         except Exception:
             pass

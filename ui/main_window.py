@@ -2,7 +2,8 @@ import os
 
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QMenuBar, QFileDialog,
                                QMessageBox, QPushButton, QStatusBar, QLabel, QDialog, QCheckBox,
-                               QRadioButton, QGroupBox, QDialogButtonBox, QButtonGroup, QComboBox)
+                               QRadioButton, QGroupBox, QDialogButtonBox, QButtonGroup, QComboBox,
+                               QSpinBox)
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtCore import QSize, Qt, QUrl, QTimer
 from ui.video_panel import VideoPanel
@@ -11,6 +12,8 @@ from ui.progress_widget import ProgressWidget
 from model.session import Session
 from autosave.autosave import Autosave
 from export.exporter import export_markers, import_markers
+
+from shared.kaderblick_qt_theme import BrandHeaderWidget
 
 class MainWindow(QMainWindow):
     def resizeEvent(self, event):
@@ -62,9 +65,9 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ballmarker")
+        self.setWindowTitle("Kaderblick - Ballmarker")
         self.session = Session()
-        self.autosave = Autosave(self.session)
+        self.autosave = Autosave(self.session, get_video_paths=self._get_loaded_video_paths, get_sync_offset=lambda: self._sync_offset_frames)
         from ui.video_graphics_panel import VideoGraphicsPanel
         self.left_panel = VideoGraphicsPanel(self.session)
         self.right_panel = VideoGraphicsPanel(self.session)
@@ -118,6 +121,23 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.jump_type_combo)
         controls.addWidget(self.jump_next_btn)
 
+        # Sync-Offset Steuerung
+        controls.addSpacing(16)
+        self._sync_offset_frames = 0
+        sync_label = QLabel("Sync-Offset (Frames):")
+        sync_label.setToolTip("Verschiebt das rechte Video relativ zum linken.\n"
+                              "Positiv = rechtes Video wird vorgeschoben,\n"
+                              "Negativ = rechtes Video wird zurückgeschoben.")
+        controls.addWidget(sync_label)
+        self._sync_offset_spin = QSpinBox()
+        self._sync_offset_spin.setRange(-10000, 10000)
+        self._sync_offset_spin.setValue(0)
+        self._sync_offset_spin.setSuffix(" F")
+        self._sync_offset_spin.setToolTip("Frame-Offset für das rechte Video")
+        self._sync_offset_spin.setFixedWidth(100)
+        self._sync_offset_spin.valueChanged.connect(self._on_sync_offset_changed)
+        controls.addWidget(self._sync_offset_spin)
+
         # Werkzeug-Leiste: YOLO + Interpolation
         tools = QHBoxLayout()
         self.detect_btn = QPushButton("⚽ Ball erkennen (YOLO)")
@@ -139,10 +159,14 @@ class MainWindow(QMainWindow):
         tools.addWidget(self.interpolate_btn, stretch=1)
 
         layout = QVBoxLayout()
-        video_layout = QHBoxLayout()
-        video_layout.addWidget(self.left_panel)
-        video_layout.addWidget(self.right_panel)
-        layout.addLayout(video_layout)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self._brand_header = BrandHeaderWidget(subtitle="Ball Marker", tone="brand")
+        layout.addWidget(self._brand_header)
+        self._video_layout = QHBoxLayout()
+        self._video_layout.addWidget(self.left_panel, stretch=1)
+        self._video_layout.addWidget(self.right_panel, stretch=1)
+        layout.addLayout(self._video_layout)
         layout.addLayout(controls)
         layout.addLayout(tools)
         layout.addWidget(self.timeline)
@@ -246,6 +270,14 @@ class MainWindow(QMainWindow):
         field_cal_action.triggered.connect(self._load_field_calibration)
         tools_menu.addAction(field_cal_action)
 
+        field_create_action = QAction("Feldkalibrierung erstellen/bearbeiten…", self)
+        field_create_action.triggered.connect(self._create_field_calibration)
+        tools_menu.addAction(field_create_action)
+
+        field_export_action = QAction("Feldkalibrierung exportieren…", self)
+        field_export_action.triggered.connect(self._export_field_calibration)
+        tools_menu.addAction(field_export_action)
+
         field_clear_action = QAction("Feldgrenze entfernen", self)
         field_clear_action.triggered.connect(self._clear_field_boundary)
         tools_menu.addAction(field_clear_action)
@@ -308,6 +340,18 @@ class MainWindow(QMainWindow):
         self.menuBar().update()
         self.menuBar().repaint()
 
+    # ── Video-Pfade für Autosave ────────────────────────────────────
+
+    def _get_loaded_video_paths(self) -> list[str]:
+        """Gibt die Pfade der aktuell geladenen Videos zurück (für Autosave)."""
+        paths = []
+        for panel in (self.left_panel, self.right_panel):
+            if panel.has_video:
+                paths.append(panel.player.source().toString())
+            else:
+                paths.append("")
+        return paths
+
     # ── Auto-Resize bei Video-Laden ───────────────────────────────────
 
     def _on_video_loaded(self, resolution: QSize):
@@ -347,13 +391,46 @@ class MainWindow(QMainWindow):
 
         self.resize(target_w, target_h)
 
+        # Beide Panels gleichmäßig verteilen (wichtig wenn 2. Video
+        # nachträglich geladen wird und resize ein No-Op ist)
+        self._video_layout.invalidate()
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._equalize_panels)
+
         # Ggf. gespeicherte Feldkalibrierung auf das neue Video anwenden
-        cal_path = self.autosave.load_field_calibration_path()
-        if cal_path and os.path.isfile(cal_path):
+        from autosave.autosave import DEFAULT_FIELD_CALIBRATION_PATH
+        if os.path.isfile(DEFAULT_FIELD_CALIBRATION_PATH):
             sender_panel = self.sender()
             if sender_panel and hasattr(sender_panel, 'load_field_calibration'):
                 if sender_panel._field_boundary is None:
-                    sender_panel.load_field_calibration(cal_path)
+                    sender_panel.load_field_calibration(DEFAULT_FIELD_CALIBRATION_PATH)
+
+        # Sofort speichern wenn sich der Video-Zustand ändert
+        self.autosave.save()
+
+    def _equalize_panels(self):
+        """Erzwingt gleichmäßige Breitenverteilung beider Video-Panels."""
+        half = self.left_panel.parent().width() // 2
+        self.left_panel.setMinimumWidth(half)
+        self.right_panel.setMinimumWidth(half)
+        # Einschränkung sofort wieder aufheben, damit Resize frei bleibt
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(50, self._release_panel_constraints)
+
+    def _release_panel_constraints(self):
+        """Hebt die temporäre Mindestbreite beider Panels wieder auf."""
+        self.left_panel.setMinimumWidth(0)
+        self.right_panel.setMinimumWidth(0)
+
+    def _on_sync_offset_changed(self, value: int):
+        """Wird aufgerufen wenn der Sync-Offset geändert wird."""
+        self._sync_offset_frames = value
+        self.timeline.sync_offset = value
+        # Rechtes Video sofort an neue Position anpassen
+        if self.right_panel.has_video and self.left_panel.has_video:
+            left_frame = self.left_panel.current_frame()
+            self.right_panel.set_frame(left_frame + self._sync_offset_frames)
+        self.autosave.save()
 
     # ── Zentrales Play/Pause ──────────────────────────────────────────
 
@@ -375,6 +452,10 @@ class MainWindow(QMainWindow):
         else:
             self.left_panel.step_backward(-n)
             self.right_panel.step_backward(-n)
+        # Sync-Offset auf rechtes Panel anwenden
+        if self._sync_offset_frames != 0 and self.right_panel.has_video:
+            left_frame = self.left_panel.current_frame()
+            self.right_panel.set_frame(left_frame + self._sync_offset_frames)
         self.timeline.selected_frame = self.left_panel.current_frame()
         self.timeline.update()
 
@@ -504,6 +585,8 @@ class MainWindow(QMainWindow):
         if self.left_panel.has_video:
             self.timeline.selected_frame = self.left_panel.current_frame()
         self.timeline.update()
+        # Sofort speichern bei Marker-Änderung
+        self.autosave.save()
 
     # ── YOLO + Interpolation ──────────────────────────────────────────
 
@@ -593,6 +676,12 @@ class MainWindow(QMainWindow):
             self.timeline.update()
             self.update_undo_redo_actions()
 
+    def closeEvent(self, event):
+        """Beim Schließen den aktuellen Zustand speichern."""
+        self.autosave.save()
+        self.autosave.stop()
+        super().closeEvent(event)
+
     def keyPressEvent(self, event):
         """Globale Tastatursteuerung für Wiedergabe und Frame-Navigation."""
         key = event.key()
@@ -638,7 +727,7 @@ class MainWindow(QMainWindow):
         os.makedirs(DEFAULT_EXPORT_DIR, exist_ok=True)
         filename, _ = QFileDialog.getSaveFileName(self, "Exportieren", os.path.join(DEFAULT_EXPORT_DIR, "ballmarker.json"), "JSON Files (*.json)")
         if filename:
-            saved_path = export_markers(self.session.markers, filename)
+            saved_path = export_markers(self.session.markers, filename, sync_offset_frames=self._sync_offset_frames)
             QMessageBox.information(self, "Export", f"Export erfolgreich: {saved_path}")
         self.update_undo_redo_actions()
 
@@ -650,7 +739,7 @@ class MainWindow(QMainWindow):
             return
         self._load_markers_from_file(filename)
 
-    def _load_markers_from_file(self, filename):
+    def _load_markers_from_file(self, filename, silent=False):
         """Lädt Marker aus einer JSON-Datei und stellt Videos + Marker wieder her."""
         try:
             markers = import_markers(filename)
@@ -658,7 +747,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Import-Fehler", f"Datei konnte nicht geladen werden:\n{e}")
             return
         if not markers:
-            QMessageBox.information(self, "Import", "Keine Marker in der Datei gefunden.")
+            if not silent:
+                QMessageBox.information(self, "Import", "Keine Marker in der Datei gefunden.")
             return
 
         # Bestehende Marker ersetzen
@@ -678,12 +768,7 @@ class MainWindow(QMainWindow):
                 # file:// URI → lokaler Pfad
                 local_path = QUrl(vf).toLocalFile() if vf.startswith("file://") else vf
                 if local_path and os.path.isfile(local_path):
-                    panel.player.setSource(QUrl.fromLocalFile(local_path))
-                    panel.player.setPosition(0)
-                    panel.player.pause()
-                    panel._zoom_level = 1.0
-                    panel._fps_detector.detect_from_file(local_path)
-                    panel._ensure_keyframes()
+                    panel.load_video(local_path)
 
         # KF-Status zurücksetzen (werden nach Analyse verfügbar)
         self._keyframes_available = False
@@ -693,7 +778,8 @@ class MainWindow(QMainWindow):
         self.right_panel.sync_markers_with_session()
         self.timeline.update()
         self.update_undo_redo_actions()
-        QMessageBox.information(self, "Import", f"{len(markers)} Marker aus {len(video_files)} Video(s) geladen.")
+        if not silent:
+            QMessageBox.information(self, "Import", f"{len(markers)} Marker aus {len(video_files)} Video(s) geladen.")
 
     def _check_autosave_recovery(self):
         """Prüft beim Start ob eine Autosave-Datei vorhanden ist und bietet Wiederherstellung an."""
@@ -708,13 +794,56 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self._load_markers_from_file(self.session.autosave_path)
-            # Feldkalibrierung wiederherstellen
-            cal_path = self.autosave.load_field_calibration_path()
-            if cal_path and os.path.isfile(cal_path):
-                self._restore_field_calibration(cal_path)
+            self._restore_full_session()
         else:
             self.autosave.clear()
+
+    def _restore_full_session(self):
+        """Stellt die komplette Sitzung wieder her (Videos, Marker, Kalibrierung)."""
+        session_data = self.autosave.load_session_data()
+
+        # 1. Videos laden
+        loaded_videos = session_data.get("loaded_videos", [])
+        panels = [self.left_panel, self.right_panel]
+        for i, panel in enumerate(panels):
+            if i < len(loaded_videos) and loaded_videos[i]:
+                vf = loaded_videos[i]
+                local_path = QUrl(vf).toLocalFile() if vf.startswith("file://") else vf
+                if local_path and os.path.isfile(local_path):
+                    panel.load_video(local_path)
+
+        # 2. Marker laden
+        markers = self.autosave.recover()
+        if markers:
+            self.session.markers.clear()
+            self.session.undo_stack.clear()
+            self.session.redo_stack.clear()
+            self.session.markers.extend(markers)
+
+            # Falls Videos nicht aus loaded_videos kamen, aus Markern ableiten
+            if not loaded_videos:
+                video_files = sorted(set(m.video_file for m in markers))
+                for i, panel in enumerate(panels):
+                    if i < len(video_files) and not panel.has_video:
+                        vf = video_files[i]
+                        local_path = QUrl(vf).toLocalFile() if vf.startswith("file://") else vf
+                        if local_path and os.path.isfile(local_path):
+                            panel.load_video(local_path)
+
+            self.left_panel.sync_markers_with_session()
+            self.right_panel.sync_markers_with_session()
+            self.timeline.update()
+            self.update_undo_redo_actions()
+
+        # 3. Sync-Offset wiederherstellen
+        sync_offset = session_data.get("sync_offset_frames", 0)
+        if sync_offset:
+            self._sync_offset_spin.setValue(sync_offset)
+
+        # 4. Feldkalibrierung wiederherstellen
+        from autosave.autosave import DEFAULT_FIELD_CALIBRATION_PATH
+        if os.path.isfile(DEFAULT_FIELD_CALIBRATION_PATH):
+            self._restore_field_calibration(DEFAULT_FIELD_CALIBRATION_PATH)
 
     # ── Feldkalibrierung ──────────────────────────────────────────
 
@@ -734,14 +863,17 @@ class MainWindow(QMainWindow):
         if loaded == 0:
             self.statusBar().showMessage("Keine passende Kamera zugeordnet – bitte Videos zuerst laden", 5000)
         else:
-            # Pfad für Autosave merken
-            self.autosave.save_field_calibration_path(path)
+            # Externe Kalibrierung in den Standard-Pfad kopieren
+            from autosave.autosave import DEFAULT_FIELD_CALIBRATION_PATH
+            if os.path.normpath(path) != os.path.normpath(DEFAULT_FIELD_CALIBRATION_PATH):
+                import shutil
+                os.makedirs(os.path.dirname(DEFAULT_FIELD_CALIBRATION_PATH), exist_ok=True)
+                shutil.copy2(path, DEFAULT_FIELD_CALIBRATION_PATH)
 
     def _clear_field_boundary(self):
         """Entfernt die Feldgrenze von beiden Panels."""
         for panel in (self.left_panel, self.right_panel):
             panel.clear_field_boundary()
-        self.autosave.save_field_calibration_path(None)
 
     def _restore_field_calibration(self, cal_path: str):
         """Stellt die Feldkalibrierung für alle geladenen Videos wieder her."""
@@ -752,6 +884,92 @@ class MainWindow(QMainWindow):
                     loaded += 1
         if loaded:
             self.statusBar().showMessage(f"Feldkalibrierung wiederhergestellt ({loaded} Kamera(s))", 3000)
+
+    # ── Feldkalibrierung erstellen ────────────────────────────────
+
+    def _create_field_calibration(self):
+        """Öffnet den interaktiven Kalibrierungsdialog für die aktive Kameraseite."""
+        from calibration.calibration_dialog import FieldCalibrationDialog
+        from PySide6.QtCore import QUrl
+
+        # Video-Pfade beider Kameras sammeln
+        video_paths = {}
+        frame_index = 0
+        camera_id = 0
+
+        if self.left_panel.has_video:
+            video_paths[0] = QUrl(self.left_panel.player.source().toString()).toLocalFile()
+        if self.right_panel.has_video:
+            video_paths[1] = QUrl(self.right_panel.player.source().toString()).toLocalFile()
+
+        if not video_paths:
+            QMessageBox.warning(self, "Feldkalibrierung",
+                                "Bitte zuerst ein Video laden.")
+            return
+
+        # Initiale Kamera: bevorzugt links, sonst rechts
+        if 0 in video_paths:
+            camera_id = 0
+            frame_index = self.left_panel.current_frame()
+        else:
+            camera_id = 1
+            frame_index = self.right_panel.current_frame()
+
+        from autosave.autosave import DEFAULT_FIELD_CALIBRATION_PATH
+        cal_path = DEFAULT_FIELD_CALIBRATION_PATH
+
+        dlg = FieldCalibrationDialog(
+            parent=self,
+            video_path=video_paths.get(camera_id, ""),
+            camera_id=camera_id,
+            frame_index=frame_index,
+            calibration_path=cal_path,
+            video_paths=video_paths,
+        )
+        dlg.calibration_saved.connect(self._on_calibration_saved)
+        dlg.exec()
+
+    def _on_calibration_saved(self, path: str):
+        """Wird aufgerufen wenn der Kalibrierungsdialog gespeichert hat."""
+        # Kalibrierung in beiden Panels neu laden
+        loaded = 0
+        for panel in (self.left_panel, self.right_panel):
+            if panel.has_video:
+                if panel.load_field_calibration(path):
+                    loaded += 1
+        if loaded:
+            self.statusBar().showMessage(
+                f"Feldkalibrierung gespeichert und angewendet ({loaded} Kamera(s))", 5000)
+        else:
+            self.statusBar().showMessage("Feldkalibrierung gespeichert", 3000)
+
+    def _export_field_calibration(self):
+        """Exportiert die aktuelle Feldkalibrierung."""
+        # Bestehende Kalibrierung finden
+        from autosave.autosave import DEFAULT_FIELD_CALIBRATION_PATH
+        cal_path = DEFAULT_FIELD_CALIBRATION_PATH
+        if not os.path.isfile(cal_path):
+            QMessageBox.information(
+                self, "Export",
+                "Keine Feldkalibrierung vorhanden.\n"
+                "Bitte zuerst eine Kalibrierung erstellen oder laden.")
+            return
+
+        from autosave.autosave import DEFAULT_EXPORT_DIR
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Feldkalibrierung exportieren",
+            os.path.join(DEFAULT_EXPORT_DIR, "field_calibration.json"),
+            "JSON-Dateien (*.json)")
+        if not dest:
+            return
+
+        import shutil
+        try:
+            shutil.copy2(cal_path, dest)
+            QMessageBox.information(self, "Export",
+                                   f"Feldkalibrierung exportiert:\n{dest}")
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", f"Export fehlgeschlagen:\n{e}")
 
     # ── Marker zurücksetzen ────────────────────────────────────────
 

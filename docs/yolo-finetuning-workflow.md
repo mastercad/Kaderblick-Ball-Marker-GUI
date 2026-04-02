@@ -17,6 +17,7 @@ damit das Modell die spezifische Kamera-Perspektive und Ballgröße lernt.
 - **GPU empfohlen** (NVIDIA mit CUDA) – Training auf CPU ist möglich, aber sehr langsam
 - **Basis-Modell** `models/yolo11l.pt` muss vorhanden sein
 - **Manuell markierte Bälle** im Ballmarker-GUI (je mehr Frames, desto besser)
+- **Feldkalibrierung** (optional, aber empfohlen) – reduziert Fehldetektionen außerhalb des Spielfelds
 
 ### Wie viele Marker brauche ich?
 
@@ -36,14 +37,29 @@ damit das Modell die spezifische Kamera-Perspektive und Ballgröße lernt.
 
 ## Schritt-für-Schritt-Anleitung
 
-### 1. Bälle im GUI markieren
+### 1. Feldkalibrierung durchführen (optional, empfohlen)
+
+Bevor du mit dem Markieren beginnst, lohnt es sich die **Spielfeldgrenzen zu kalibrieren**.
+Damit filtert YOLO automatisch alle Detektionen außerhalb des Spielfelds heraus.
+
+1. Video im GUI laden
+2. **Werkzeuge → Feldkalibrierung erstellen/bearbeiten…**
+3. Im Dialog die sichtbare Spielfeldgrenze per Klick markieren (mind. 4 Punkte, mehr für Weitwinkel). Per **Doppelklick** auf eine Verbindungslinie können nachträglich Punkte eingefügt werden, per **Rechtsklick** auf einen Punkt wird dieser entfernt.
+4. Mittellinie, Mittelkreis und Strafraum ebenfalls markieren
+5. „Speichern & Schließen" – die Kalibrierung wird fortan bei jeder YOLO-Erkennung genutzt
+
+> **Tipp:** Die Kalibrierung muss nur **einmal pro Kameraposition** durchgeführt werden.
+> Sie wird in `data/field_calibration.json` gespeichert und beim nächsten Start automatisch wiederhergestellt.
+> Über „Werkzeuge → Feldkalibrierung exportieren…" kann sie auch für andere Projekte exportiert werden.
+
+### 2. Bälle im GUI markieren
 
 1. Video(s) im Ballmarker-GUI laden
 2. Frame für Frame durchgehen und Bälle per Mausklick markieren
 3. **Nur Ballpositionen markieren** – keine Ausschlusszonen (die werden automatisch gefiltert)
 4. Per `Tab` / `Shift+Tab` kann man prüfen, ob alle Marker auf dem aktuellen Frame stimmen
 
-### 2. Trainingsdaten exportieren
+### 3. Trainingsdaten exportieren
 
 #### Variante A: Über das GUI (empfohlen)
 
@@ -75,7 +91,7 @@ python -m training.export_training_data data/ballmarker.json -o data/yolo_datase
 | `--val-split`  | `0.15`  | Anteil der Frames für Validierung (15%) |
 | `--box-scale`  | `2.5`   | Bounding-Box-Größe relativ zum Marker-Radius |
 
-### 3. Dataset prüfen
+### 4. Dataset prüfen
 
 Nach dem Export sollte das Verzeichnis so aussehen:
 
@@ -103,7 +119,7 @@ Jede `.txt`-Datei enthält pro Zeile eine Annotation:
 ```
 Format: `klasse_id  cx  cy  breite  höhe` (alles normiert auf 0–1)
 
-### 4. Training starten
+### 5. Training starten
 
 ```bash
 # Virtual Environment aktivieren (falls noch nicht aktiv)
@@ -143,7 +159,7 @@ python -m training.train_model data/yolo_dataset/dataset.yaml --device cpu --bat
 python -m training.train_model data/yolo_dataset/dataset.yaml -m models/yolo11s.pt
 ```
 
-### 5. Training beobachten
+### 6. Training beobachten
 
 Während des Trainings werden Logs und Grafiken gespeichert unter:
 ```
@@ -162,7 +178,7 @@ training/runs/ballmarker_finetune/
 - Wenn Val-Loss wieder steigt → **Overfitting** (weniger Epochen oder mehr Daten)
 - **mAP50** (mean Average Precision) sollte möglichst hoch sein (>0.5 ist gut)
 
-### 6. Modell verwenden
+### 7. Modell verwenden
 
 Nach erfolgreichem Training wird das beste Modell automatisch nach
 `models/ballmarker_custom.pt` kopiert.
@@ -208,6 +224,7 @@ Der Detektor wechselt automatisch die Klassen-ID je nach geladenem Modell.
 - Falsche Marker → prüfen ob die Marker wirklich auf dem Ball sitzen
 
 ### Modell produziert viele Fehlerkennungen
+- **Feldkalibrierung nutzen**: Über _Werkzeuge → Feldkalibrierung erstellen/bearbeiten…_ die Spielfeldgrenzen markieren — YOLO verwirft dann automatisch Detektionen außerhalb des Felds
 - Mehr negative Beispiele nötig (Frames ohne Ball, aber mit ähnlichen Objekten)
 - Ausschlusszonen im GUI setzen, dann YOLO-Erkennung nochmal laufen lassen
 - Confidence-Schwelle in der YOLO-Erkennung erhöhen
@@ -224,6 +241,8 @@ Das Training kann iterativ verbessert werden:
 
 ```
 ┌─────────────────────────────────────────────┐
+│  0. Feldkalibrierung durchführen (einmalig) │
+│                                             │
 │  1. Bälle manuell markieren (im GUI)        │
 │                                             │
 │  2. Trainingsdaten exportieren              │
@@ -249,6 +268,9 @@ vielfältigere Trainingsdaten bekommt.
 
 | Pfad | Beschreibung |
 |------|-------------|
+| `calibration/field_calibration.py` | Datenmodell & Persistenz für Feldkalibrierung |
+| `calibration/calibration_dialog.py` | Qt-Dialog für interaktive Kalibrierung |
+| `data/field_calibration.json` | Gespeicherte Kalibrierungsdaten (cam0/cam1) |
 | `training/export_training_data.py` | Exportiert Marker → YOLO-Dataset |
 | `training/train_model.py` | Fine-Tuning-Skript |
 | `models/yolo11l.pt` | Standard-YOLO-Modell (COCO) |
