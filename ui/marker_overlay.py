@@ -55,13 +55,14 @@ class MarkerOverlay(QWidget):
             pen = QPen(color, 2)
             painter.setPen(pen)
             r = marker.radius * min(self.width(), self.height())
+            durchmesser = 2 * r
             x = marker.position[0] * self.width() * self.zoom + self.pan[0]
             y = marker.position[1] * self.height() * self.zoom + self.pan[1]
             painter.setBrush(QColor(0, 0, 0, 0))
             if r < 1:
                 print(f"[DEBUG] paintEvent: Marker-Radius zu klein (r={r}), Marker nicht sichtbar.")
             painter.drawEllipse(int(x - r), int(y - r), int(2 * r), int(2 * r))
-            print(f"[DEBUG] paintEvent: marker pos=({x},{y}), radius={r}, type={marker.type}")
+            print(f"[DEBUG] paintEvent: marker pos=({x},{y}), radius={r}, durchmesser={durchmesser}, type={marker.type}")
             if marker.type == "interpolated":
                 painter.setPen(QPen(QColor(220, 60, 60, 120), 2, Qt.PenStyle.DashLine))
                 painter.drawEllipse(int(x - r), int(y - r), int(2 * r), int(2 * r))
@@ -151,7 +152,7 @@ class MarkerOverlay(QWidget):
         elif self.selected_marker:
             # Markergröße ändern
             delta = event.angleDelta().y() / 1200.0
-            new_radius = max(0.01, min(0.2, self.selected_marker.radius + delta))
+            new_radius = max(0.003, min(0.5, self.selected_marker.radius + delta))
             self.session.resize_marker(self.selected_marker, new_radius)
             self.update()
             print(f"[DEBUG] Markergröße geändert: marker={self.selected_marker}, new_radius={new_radius}")

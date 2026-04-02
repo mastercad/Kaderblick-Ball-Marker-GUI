@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QFileDi
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtCore import Qt, QUrl, QTimer
+from video.fps_detect import FpsDetector
 
 class VideoPlayer(QWidget):
     def __init__(self, side):
@@ -23,9 +24,12 @@ class VideoPlayer(QWidget):
         self.offset_spin.setValue(0)
         self.offset_spin.valueChanged.connect(self.set_offset)
         self.offset = 0
+        self._fps_detector = FpsDetector()
+        self._fps_detector.player = self.player
         self.playing = False
         self.timer = QTimer()
         self.timer.timeout.connect(self._update_frame)
+        self.player.metaDataChanged.connect(self._fps_detector.on_metadata_changed)
         layout = QVBoxLayout()
         offset_layout = QHBoxLayout()
         offset_layout.addWidget(self.offset_label)
@@ -44,18 +48,27 @@ class VideoPlayer(QWidget):
             self.info_label.setText(filename)
             self.video_widget.show()
             self.player.setPosition(0)
+            self._fps_detector.detect_from_file(filename)
+
+    @property
+    def fps(self):
+        return self._fps_detector.fps
+
+    @property
+    def ms_per_frame(self):
+        return self._fps_detector.ms_per_frame
 
     def current_frame(self):
-        return int(self.player.position() / 40) - self.offset
+        return int(self.player.position() / self.ms_per_frame) - self.offset
 
     def current_timestamp(self):
         return self.player.position()
 
     def total_frames(self):
-        return max(1, int(self.player.duration() / 40))
+        return max(1, int(self.player.duration() / self.ms_per_frame))
 
     def set_frame(self, frame):
-        self.player.setPosition((frame + self.offset) * 40)
+        self.player.setPosition(int((frame + self.offset) * self.ms_per_frame))
 
     def set_offset(self, value):
         self.offset = value
@@ -66,7 +79,7 @@ class VideoPlayer(QWidget):
             self.timer.stop()
         else:
             self.player.play()
-            self.timer.start(40)
+            self.timer.start(int(self.ms_per_frame))
         self.playing = not self.playing
 
     def _update_frame(self):

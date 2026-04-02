@@ -1,9 +1,21 @@
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from video.video_player import VideoPlayer
+import pytest
+from PySide6.QtWidgets import QApplication
 
-def test_video_player_methods():
+
+@pytest.fixture(scope="module")
+def qapp():
+    """Stellt sicher, dass eine QApplication existiert (nötig für QWidget-basierte Klassen)."""
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication([])
+    return app
+
+
+def test_video_player_methods(qapp):
+    from video.video_player import VideoPlayer
     vp = VideoPlayer("left")
     assert vp.current_frame() == 0
     assert vp.current_timestamp() == 0

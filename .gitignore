@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.egg
+*.eggs
+*.whl
+*.env
+.env/
+venv/
+ENV/
+env/
+.venv/
+
+# VS Code
+.vscode/
+
+# Qt Creator
+*.pro.user
+*.qbs.user
+*.moc
+*.obj
+*.rcc
+*.qrc
+*.qmlc
+*.qmlcache
+*.gch
+*.autosave
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# Logs
+*.log
+
+# Test/coverage
+htmlcov/
+.coverage
+.tox/
+.nox/
+.cache/
+pytest_cache/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Misc
+*.bak
+*.swp
+*.swo
+.idea/
+
+# Multimedia
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
+*.mp3
+*.wav
+*.ogg
+*.flac
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Other
+*.sqlite3
+*.db
+*.tar.gz
+*.zip
+*.7z
+*.rar
+*.tmp
+
+# Git
+.git/
+.pytest_cache
+
+# Laufzeitdaten (Autosave, Exports, Kalibrierung)
+data/
+
+# YOLO-Modelle (große Binärdateien)
+models/*.pt
