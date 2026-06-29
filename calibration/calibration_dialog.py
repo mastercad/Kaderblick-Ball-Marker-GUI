@@ -50,6 +50,7 @@ from calibration.field_calibration import (
 )
 from calibration.point_manager import PointManager
 from calibration.scene_renderer import SceneRenderer
+from shared.app_paths import runtime_path
 
 log = logging.getLogger("field_calibration_dialog")
 
@@ -81,10 +82,7 @@ class FieldCalibrationDialog(QDialog):
         self._camera_id = camera_id
         self._frame_index = frame_index
         self._frame_indices: Dict[int, int] = frame_indices or {camera_id: frame_index}
-        self._calibration_path = calibration_path or os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "data", "field_calibration.json",
-        )
+        self._calibration_path = calibration_path or str(runtime_path("data", "field_calibration.json"))
 
         # Kalibrierungsdaten + Punkt-Manager
         self._data = FieldCalibrationData(camera_id=camera_id)

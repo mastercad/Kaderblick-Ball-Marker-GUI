@@ -5,12 +5,13 @@ import threading
 import time
 
 from export.exporter import export_markers, import_markers
+from shared.app_paths import runtime_path
 
 # Autosave alle 15 Sekunden
 _AUTOSAVE_INTERVAL = 15
 
 # ── Zentrale Pfade für alle Laufzeitdaten ─────────────────────
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_DATA_DIR = str(runtime_path("data"))
 AUTOSAVE_SESSION_PATH = os.path.join(_DATA_DIR, "session.json")
 DEFAULT_FIELD_CALIBRATION_PATH = os.path.join(_DATA_DIR, "field_calibration.json")
 DEFAULT_EXPORT_DIR = _DATA_DIR

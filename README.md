@@ -263,3 +263,38 @@ Die JSON-Datei enthält pro Kamera einen Eintrag:
    ```
    python main.py
    ```
+
+## Executable bauen
+
+Die App kann mit PyInstaller als eigenständige Desktop-App gebaut werden. Der Build muss jeweils auf dem Zielsystem laufen:
+
+- Windows-Build auf Windows
+- Linux-Build auf Linux
+- macOS-Build auf macOS
+
+### Build vorbereiten
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+pip install -r requirements-build.txt
+```
+
+### App bauen
+
+```bash
+pyinstaller --clean --noconfirm ballmarker_gui.spec
+```
+
+Das Ergebnis liegt danach unter `dist/Kaderblick BallMarker/`.
+
+Unter macOS entsteht zusaetzlich `dist/Kaderblick BallMarker.app`. Unter Windows ist die startbare Datei `dist/Kaderblick BallMarker/Kaderblick BallMarker.exe`.
+
+Laufzeitdaten werden nie in die App eingebettet. Im Source-Betrieb liegen sie weiter im gitignorierten Projektordner `data/` bzw. `models/`. Bei der gebauten App werden sie nicht in den Installationsordner geschrieben, sondern in den Benutzerbereich:
+
+- Windows: `%APPDATA%\Kaderblick\BallMarker`
+- macOS: `~/Library/Application Support/Kaderblick/BallMarker`
+- Linux: `~/.local/share/kaderblick-ballmarker`
+
+YOLO-Modelle werden bewusst nicht in die Executable eingebettet. Lege `yolo11l.pt` oder `ballmarker_custom.pt` bei der gebauten App in den Unterordner `models` dieses Benutzerbereichs. `data/` und `models/` sind Laufzeitordner, keine Build-Ressourcen. Die App-Icons und Fonts werden dagegen in die App eingebettet.

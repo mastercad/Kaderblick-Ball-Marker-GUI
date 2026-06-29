@@ -14,14 +14,16 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from shared.app_paths import runtime_path
+
 # COCO-Klasse 32 = "sports ball"
 _BALL_CLASS = 32
-_MODEL_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
-_MODEL_NAME = os.path.join(_MODEL_DIR, "yolo11l.pt")
+_MODEL_DIR = runtime_path("models")
+_MODEL_NAME = str(_MODEL_DIR / "yolo11l.pt")
 
 # Custom-Modell (Fine-Tuned): Wird automatisch bevorzugt, falls vorhanden.
 # Klasse 0 = "ball" (einzige Klasse im Custom-Dataset)
-_CUSTOM_MODEL_NAME = os.path.join(_MODEL_DIR, "ballmarker_custom.pt")
+_CUSTOM_MODEL_NAME = str(runtime_path("models", "ballmarker_custom.pt"))
 
 # Tiling-Parameter
 _TILE_SIZE = 640       # Kachelgröße in Pixel (1× Skala)

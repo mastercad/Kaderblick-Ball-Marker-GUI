@@ -12,8 +12,9 @@ und stellt optional einen einfachen Brand-Header bereit.
 from __future__ import annotations
 
 import importlib
-from pathlib import Path
 from typing import Any, cast
+
+from shared.app_paths import resource_path
 
 def _import_qt_modules():
     for binding in ("PyQt5", "PyQt6", "PySide6"):
@@ -124,7 +125,7 @@ def _ensure_brand_font_loaded() -> None:
     if _loaded_brand_family is not None:
         return
 
-    font_path = Path(__file__).resolve().parent.parent / "assets" / "ImpactLTStd.woff2"
+    font_path = resource_path("assets", "ImpactLTStd.woff2")
     if font_path.exists():
         font_id = QFontDatabase.addApplicationFont(str(font_path))
         if font_id >= 0:

@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 
 from PySide6.QtCore import QSize
@@ -7,6 +6,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
+from shared.app_paths import resource_path
 from shared.kaderblick_qt_theme import apply_application_theme
 
 # Logging konfigurieren – ball_detector gibt diagnostische Infos aus
@@ -23,15 +23,15 @@ def main():
     apply_application_theme(app)
 
     # App-Icon mit mehreren Auflösungen setzen
-    assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+    assets_dir = resource_path("assets")
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256, 512):
-        png = os.path.join(assets_dir, f"icon_{size}.png")
-        if os.path.isfile(png):
-            icon.addFile(png, QSize(size, size))
-    svg = os.path.join(assets_dir, "icon.svg")
-    if os.path.isfile(svg):
-        icon.addFile(svg)
+        png = assets_dir / f"icon_{size}.png"
+        if png.is_file():
+            icon.addFile(str(png), QSize(size, size))
+    svg = assets_dir / "icon.svg"
+    if svg.is_file():
+        icon.addFile(str(svg))
     if not icon.isNull():
         app.setWindowIcon(icon)
 
