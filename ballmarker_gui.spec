@@ -13,11 +13,22 @@ datas = [
     (str(ROOT / "assets"), "assets"),
 ]
 
-datas += collect_data_files("ultralytics")
-
 hiddenimports = []
-hiddenimports += collect_submodules("ultralytics")
 hiddenimports += collect_submodules("cv2")
+
+excludes = ["pytest", "tests"]
+
+if sys.platform.startswith("linux"):
+    excludes += [
+        "torch",
+        "torchvision",
+        "ultralytics",
+        "nvidia",
+        "triton",
+    ]
+else:
+    datas += collect_data_files("ultralytics")
+    hiddenimports += collect_submodules("ultralytics")
 
 block_cipher = None
 
@@ -30,7 +41,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest", "tests"],
+    excludes=excludes,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

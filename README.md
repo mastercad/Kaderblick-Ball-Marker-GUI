@@ -277,7 +277,6 @@ Die App kann mit PyInstaller als eigenständige Desktop-App gebaut werden. Der B
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
 pip install -r requirements-build.txt
 ```
 
@@ -297,4 +296,20 @@ Laufzeitdaten werden nie in die App eingebettet. Im Source-Betrieb liegen sie we
 - macOS: `~/Library/Application Support/Kaderblick/BallMarker`
 - Linux: `~/.local/share/kaderblick-ballmarker`
 
-YOLO-Modelle werden bewusst nicht in die Executable eingebettet. Lege `yolo11l.pt` oder `ballmarker_custom.pt` bei der gebauten App in den Unterordner `models` dieses Benutzerbereichs. `data/` und `models/` sind Laufzeitordner, keine Build-Ressourcen. Die App-Icons und Fonts werden dagegen in die App eingebettet.
+YOLO-Modelle werden bewusst nicht in die Executable eingebettet. Lege `yolo11l.pt` oder `ballmarker_custom.pt` bei der gebauten App in den Unterordner `models` dieses Benutzerbereichs. Unter Linux wird die YOLO/PyTorch-Runtime ebenfalls extern erkannt, damit lokal CUDA genutzt werden kann. Windows- und macOS-Builds enthalten die YOLO/PyTorch-Runtime im Installer. `data/`, `models/` und lokale Linux-Python-Runtimes sind Laufzeitordner, keine Build-Ressourcen. Die App-Icons und Fonts werden dagegen in die App eingebettet.
+
+### Linux: optionale GPU-Runtime installieren
+
+Unter Linux kann die gebaute App eine lokale CUDA-faehige YOLO-Runtime verwenden. Die App sucht automatisch in ueblichen Python-/venv-/Conda-Installationen sowie im App-Datenordner. Fuer den Source-Betrieb bleibt unveraendert `pip install -r requirements.txt` der einzige Installationsweg. Windows- und macOS-Builds verwenden die im Installer enthaltene YOLO-Runtime.
+
+Unter Linux wird z. B. ein venv im App-Datenordner automatisch erkannt:
+
+```bash
+python3 -m venv ~/.local/share/kaderblick-ballmarker/gpu-runtime
+source ~/.local/share/kaderblick-ballmarker/gpu-runtime/bin/activate
+python -m pip install --upgrade pip
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+python -m pip install ultralytics
+```
+
+Danach die App neu starten. Unter _Werkzeuge → GPU-Runtime Status…_ kann geprueft werden, ob CUDA verfuegbar ist. _Werkzeuge → GPU-Runtime konfigurieren…_ ist nur fuer Sonderpfade notwendig, die nicht automatisch gefunden werden.

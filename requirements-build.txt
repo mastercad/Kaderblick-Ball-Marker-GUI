@@ -1,1 +1,5 @@
 pyinstaller>=6.0
+PySide6>=6.5
+opencv-python
+numpy
+ultralytics; sys_platform != "linux"

@@ -45,16 +45,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-build.txt
 
       - name: Install Linux runtime libraries
         if: runner.os == 'Linux'
         run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
           sudo apt-get update
           sudo apt-get install -y dpkg-dev libegl1 libgl1 libxkbcommon-x11-0
+          df -h
 
       - name: Install Windows installer tooling
         if: runner.os == 'Windows'
@@ -64,8 +64,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -r requirements-build.txt
+
+      - name: Install app Python dependencies
+        run: python -m pip install --no-cache-dir -r requirements-build.txt
 
       - name: Verify runtime data is not bundled
         shell: bash

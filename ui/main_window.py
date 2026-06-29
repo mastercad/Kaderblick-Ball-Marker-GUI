@@ -1,4 +1,5 @@
 import os
+import sys
 
 from PySide6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QMenuBar, QFileDialog,
                                QMessageBox, QPushButton, QStatusBar, QLabel, QDialog, QCheckBox,
@@ -291,6 +292,15 @@ class MainWindow(QMainWindow):
         load_model_action = QAction("Eigenes Modell laden…", self)
         load_model_action.triggered.connect(self._load_custom_model)
         tools_menu.addAction(load_model_action)
+
+        if sys.platform.startswith("linux"):
+            gpu_runtime_action = QAction("GPU-Runtime konfigurieren…", self)
+            gpu_runtime_action.triggered.connect(self._configure_gpu_runtime)
+            tools_menu.addAction(gpu_runtime_action)
+
+            gpu_runtime_status_action = QAction("GPU-Runtime Status…", self)
+            gpu_runtime_status_action.triggered.connect(self._show_gpu_runtime_status)
+            tools_menu.addAction(gpu_runtime_status_action)
 
         # ── Navigation-Menü ──────────────────────────────────────
         nav_menu = menubar.addMenu("Navigation")
@@ -1030,6 +1040,65 @@ class MainWindow(QMainWindow):
             self._statusbar.showMessage(f"Custom-Modell: {os.path.basename(path)}", 5000)
         except Exception as e:
             QMessageBox.critical(self, "Fehler", f"Modell konnte nicht geladen werden:\n{e}")
+
+    def _configure_gpu_runtime(self):
+        """Konfiguriert externe site-packages, z. B. ein CUDA-faehiges venv."""
+        from shared.python_runtime import save_external_package_paths
+        from detection.ball_detector import reset_loaded_model
+
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "GPU-Runtime oder site-packages Ordner wählen",
+            os.path.expanduser("~"),
+        )
+        if not path:
+            return
+
+        paths = save_external_package_paths([path])
+        reset_loaded_model()
+
+        restart_hint = ""
+        if "torch" in sys.modules or "ultralytics" in sys.modules:
+            restart_hint = (
+                "\n\nTorch/Ultralytics war bereits geladen. Bitte App neu starten, "
+                "damit der externe GPU-Runtime-Pfad sicher vor allen Python-Importen greift."
+            )
+
+        if paths:
+            QMessageBox.information(
+                self,
+                "GPU-Runtime konfiguriert",
+                "Externe Python-Pakete werden ab der nächsten YOLO-Ladung bevorzugt:\n\n"
+                + "\n".join(paths)
+                + restart_hint,
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "GPU-Runtime nicht gefunden",
+                "Der gewählte Ordner enthält keinen nutzbaren site-packages Pfad.",
+            )
+
+    def _show_gpu_runtime_status(self):
+        """Zeigt an, welche Torch/CUDA-Runtime aktuell verwendet wird."""
+        from detection.ball_detector import runtime_status
+
+        status = runtime_status()
+        external_paths = status.get("external_paths") or []
+        external_text = "\n".join(external_paths) if external_paths else "(keine)"
+
+        message = (
+            f"Externe Paketpfade:\n{external_text}\n\n"
+            f"Torch-Version: {status.get('torch_version') or '(nicht geladen)'}\n"
+            f"Torch-Datei: {status.get('torch_file') or '(unbekannt)'}\n"
+            f"CUDA verfügbar: {'ja' if status.get('cuda_available') else 'nein'}\n"
+            f"CUDA-Version: {status.get('cuda_version') or '(keine)'}\n"
+            f"CUDA-Gerät: {status.get('cuda_device') or '(keins)'}"
+        )
+        if status.get("error"):
+            message += f"\n\nFehler:\n{status['error']}"
+
+        QMessageBox.information(self, "GPU-Runtime Status", message)
 
     def _reset_markers(self):
         """Öffnet einen Dialog zum gezielten Löschen von Markern."""

@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from shared.app_paths import runtime_path
+from shared.python_runtime import apply_external_python_paths
 
 # COCO-Klasse 32 = "sports ball"
 _BALL_CLASS = 32
@@ -61,9 +62,11 @@ def _get_model():
     falls vorhanden. Fällt sonst auf yolo11l.pt zurück.
     """
     global _model, _model_is_custom
+    apply_external_python_paths()
     if _model is None:
         with _model_lock:
             if _model is None:
+                apply_external_python_paths()
                 from ultralytics import YOLO
                 # Custom-Modell bevorzugen
                 if os.path.isfile(_CUSTOM_MODEL_NAME):
@@ -93,6 +96,7 @@ def load_custom_model(path: str) -> bool:
         True bei Erfolg.
     """
     global _model, _model_is_custom
+    apply_external_python_paths()
     with _model_lock:
         from ultralytics import YOLO
         m = YOLO(path)
@@ -110,6 +114,43 @@ def load_custom_model(path: str) -> bool:
 def is_custom_model() -> bool:
     """Gibt zurück, ob aktuell ein Custom-Modell geladen ist."""
     return _model_is_custom
+
+
+def reset_loaded_model() -> None:
+    """Forces YOLO to be loaded again on the next detection."""
+    global _model, _model_is_custom
+    with _model_lock:
+        _model = None
+        _model_is_custom = False
+
+
+def runtime_status() -> dict:
+    """Returns information about the active Torch runtime."""
+    apply_external_python_paths()
+    status = {
+        "external_paths": [],
+        "torch_version": "",
+        "torch_file": "",
+        "cuda_available": False,
+        "cuda_version": "",
+        "cuda_device": "",
+        "error": "",
+    }
+    try:
+        from shared.python_runtime import configured_external_package_paths
+
+        status["external_paths"] = configured_external_package_paths()
+        import torch
+
+        status["torch_version"] = getattr(torch, "__version__", "")
+        status["torch_file"] = getattr(torch, "__file__", "")
+        status["cuda_available"] = bool(torch.cuda.is_available())
+        status["cuda_version"] = str(getattr(torch.version, "cuda", "") or "")
+        if status["cuda_available"]:
+            status["cuda_device"] = torch.cuda.get_device_name(0)
+    except Exception as exc:
+        status["error"] = str(exc)
+    return status
 
 
 def get_ball_class() -> int:
