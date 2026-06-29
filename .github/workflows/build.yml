@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write
 
+env:
+  APP_NAME: Kaderblick BallMarker
+  APP_ID: kaderblick-ballmarker
+  APP_VERSION: 0.0.${{ github.run_number }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,15 +30,12 @@ jobs:
           - name: Linux
             os: ubuntu-latest
             artifact: kaderblick-ballmarker-linux
-            package: kaderblick-ballmarker-linux.tar.gz
           - name: Windows
             os: windows-latest
             artifact: kaderblick-ballmarker-windows
-            package: kaderblick-ballmarker-windows.zip
           - name: macOS
             os: macos-latest
             artifact: kaderblick-ballmarker-macos
-            package: kaderblick-ballmarker-macos.zip
 
     steps:
       - name: Check out repository
@@ -52,7 +54,12 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
+          sudo apt-get install -y dpkg-dev libegl1 libgl1 libxkbcommon-x11-0
+
+      - name: Install Windows installer tooling
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
 
       - name: Install Python dependencies
         run: |
@@ -71,24 +78,103 @@ jobs:
       - name: Build application
         run: pyinstaller --clean --noconfirm ballmarker_gui.spec
 
-      - name: Package Linux build
+      - name: Package Linux portable and installer
         if: runner.os == 'Linux'
-        run: tar -czf "${{ matrix.package }}" -C dist "Kaderblick BallMarker"
+        run: |
+          mkdir -p release
+          tar -czf "release/kaderblick-ballmarker-linux-portable.tar.gz" -C dist "${APP_NAME}"
 
-      - name: Package Windows build
+          mkdir -p deb/DEBIAN
+          mkdir -p deb/opt/kaderblick-ballmarker
+          mkdir -p deb/usr/bin
+          mkdir -p deb/usr/share/applications
+          mkdir -p deb/usr/share/icons/hicolor/512x512/apps
+
+          cp -a "dist/${APP_NAME}/." deb/opt/kaderblick-ballmarker/
+          install -m 644 assets/icon_512.png deb/usr/share/icons/hicolor/512x512/apps/kaderblick-ballmarker.png
+          ln -s "/opt/kaderblick-ballmarker/${APP_NAME}" deb/usr/bin/kaderblick-ballmarker
+
+          cat > deb/DEBIAN/control <<EOF
+          Package: kaderblick-ballmarker
+          Version: ${APP_VERSION}
+          Section: video
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Kaderblick
+          Depends: libc6, libegl1, libgl1, libxkbcommon-x11-0
+          Description: Kaderblick BallMarker desktop application
+           Desktop application for marking ball positions in football videos.
+          EOF
+
+          cat > deb/usr/share/applications/kaderblick-ballmarker.desktop <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Kaderblick BallMarker
+          Comment=Mark ball positions in football videos
+          Exec="/opt/kaderblick-ballmarker/${APP_NAME}"
+          Icon=kaderblick-ballmarker
+          Terminal=false
+          Categories=AudioVideo;Video;
+          EOF
+
+          dpkg-deb --build deb "release/kaderblick-ballmarker-linux-installer.deb"
+
+      - name: Package Windows portable and installer
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path "dist/Kaderblick BallMarker" -DestinationPath "${{ matrix.package }}" -Force
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Compress-Archive -Path "dist/${env:APP_NAME}" -DestinationPath "release/kaderblick-ballmarker-windows-portable.zip" -Force
 
-      - name: Package macOS build
+          @"
+          [Setup]
+          AppId=kaderblick-ballmarker
+          AppName=Kaderblick BallMarker
+          AppVersion=${env:APP_VERSION}
+          AppPublisher=Kaderblick
+          DefaultDirName={autopf}\Kaderblick BallMarker
+          DefaultGroupName=Kaderblick BallMarker
+          OutputDir=release
+          OutputBaseFilename=kaderblick-ballmarker-windows-installer
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          SetupIconFile=assets\icon.ico
+          UninstallDisplayIcon={app}\Kaderblick BallMarker.exe
+
+          [Files]
+          Source: "dist\Kaderblick BallMarker\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\Kaderblick BallMarker"; Filename: "{app}\Kaderblick BallMarker.exe"
+          Name: "{autodesktop}\Kaderblick BallMarker"; Filename: "{app}\Kaderblick BallMarker.exe"; Tasks: desktopicon
+
+          [Tasks]
+          Name: "desktopicon"; Description: "Desktop-Verknuepfung erstellen"; GroupDescription: "Optionale Verknuepfungen:"
+
+          [Run]
+          Filename: "{app}\Kaderblick BallMarker.exe"; Description: "Kaderblick BallMarker starten"; Flags: nowait postinstall skipifsilent
+          "@ | Set-Content -Path installer.iss -Encoding UTF8
+
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Package macOS portable and installer
         if: runner.os == 'macOS'
-        run: ditto -c -k --sequesterRsrc --keepParent "dist/Kaderblick BallMarker.app" "${{ matrix.package }}"
+        run: |
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent "dist/${APP_NAME}.app" "release/kaderblick-ballmarker-macos-portable.zip"
+          pkgbuild \
+            --component "dist/${APP_NAME}.app" \
+            --install-location /Applications \
+            --identifier de.kaderblick.ballmarker \
+            --version "${APP_VERSION}" \
+            "release/kaderblick-ballmarker-macos-installer.pkg"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.package }}
+          path: release/*
           if-no-files-found: error
           retention-days: 14
 
