@@ -892,15 +892,17 @@ class MainWindow(QMainWindow):
         from calibration.calibration_dialog import FieldCalibrationDialog
         from PySide6.QtCore import QUrl
 
-        # Video-Pfade beider Kameras sammeln
+        # Video-Pfade und Frame-Indizes beider Kameras sammeln
         video_paths = {}
-        frame_index = 0
+        frame_indices = {}
         camera_id = 0
 
         if self.left_panel.has_video:
             video_paths[0] = QUrl(self.left_panel.player.source().toString()).toLocalFile()
+            frame_indices[0] = self.left_panel.current_frame()
         if self.right_panel.has_video:
             video_paths[1] = QUrl(self.right_panel.player.source().toString()).toLocalFile()
+            frame_indices[1] = self.right_panel.current_frame()
 
         if not video_paths:
             QMessageBox.warning(self, "Feldkalibrierung",
@@ -910,10 +912,8 @@ class MainWindow(QMainWindow):
         # Initiale Kamera: bevorzugt links, sonst rechts
         if 0 in video_paths:
             camera_id = 0
-            frame_index = self.left_panel.current_frame()
         else:
             camera_id = 1
-            frame_index = self.right_panel.current_frame()
 
         from autosave.autosave import DEFAULT_FIELD_CALIBRATION_PATH
         cal_path = DEFAULT_FIELD_CALIBRATION_PATH
@@ -922,9 +922,10 @@ class MainWindow(QMainWindow):
             parent=self,
             video_path=video_paths.get(camera_id, ""),
             camera_id=camera_id,
-            frame_index=frame_index,
+            frame_index=frame_indices.get(camera_id, 0),
             calibration_path=cal_path,
             video_paths=video_paths,
+            frame_indices=frame_indices,
         )
         dlg.calibration_saved.connect(self._on_calibration_saved)
         dlg.exec()

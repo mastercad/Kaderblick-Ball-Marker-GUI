@@ -47,13 +47,14 @@ QVBoxLayout = QtWidgets.QVBoxLayout
 QWidget = cast(type[Any], QtWidgets.QWidget)
 
 
-PRIMARY_GREEN = "#06B62E"
-PRIMARY_GREEN_DARK = "#059B28"
-PRIMARY_GREEN_SOFT = "#E9F8EC"
+PRIMARY_COLOR = "#B56A2D"
+PRIMARY_COLOR_DARK = "#8F4E1D"
+PRIMARY_COLOR_SOFT = "#F7E8DC"
+BRAND_K_GREEN = "#018707"
 SURFACE = "#FFFFFF"
-SURFACE_ALT = "#F7FAF7"
-APP_BG = "#F3F5F2"
-BORDER = "#D6E3D6"
+SURFACE_ALT = "#FAF7F4"
+APP_BG = "#F5F2EF"
+BORDER = "#E2D3C7"
 TEXT = "#18212B"
 MUTED = "#667582"
 BRAND_HEADER_TEXT = "rgba(255, 255, 255, 0.92)"
@@ -181,7 +182,7 @@ class BrandWordmarkWidget(QWidget):
         rest_baseline_y = top + rest_metrics.ascent()
 
         painter.setFont(first_font)
-        painter.setPen(QColor("#018707"))
+        painter.setPen(QColor(BRAND_K_GREEN))
         painter.drawText(0, first_baseline_y, self._first)
 
         painter.setFont(self.font())
@@ -196,7 +197,7 @@ def build_palette(seed: QPalette | None = None) -> QPalette:
     surface = QColor(SURFACE)
     surface_alt = QColor(SURFACE_ALT)
     app_bg = QColor(APP_BG)
-    selection = QColor("#D8F2DE")
+    selection = QColor("#F1D9C8")
     muted = QColor(MUTED)
 
     for group_name in ("Active", "Inactive", "Disabled"):
@@ -231,7 +232,7 @@ def build_stylesheet() -> str:
     }}
 
     QMenuBar {{
-        background: {PRIMARY_GREEN};
+        background: {PRIMARY_COLOR};
         color: white;
         border: none;
         padding: 4px 12px;
@@ -262,12 +263,12 @@ def build_stylesheet() -> str:
     }}
 
     QMenu::item:selected {{
-        background: {PRIMARY_GREEN_SOFT};
-        color: {PRIMARY_GREEN_DARK};
+        background: {PRIMARY_COLOR_SOFT};
+        color: {PRIMARY_COLOR_DARK};
     }}
 
     QToolBar {{
-        background: {PRIMARY_GREEN};
+        background: {PRIMARY_COLOR};
         border: none;
         spacing: 6px;
         padding: 10px 14px;
@@ -345,20 +346,20 @@ def build_stylesheet() -> str:
     QAbstractSpinBox,
     QTextEdit {{
         padding: 8px 10px;
-        selection-background-color: #D8F2DE;
+        selection-background-color: #F1D9C8;
         selection-color: {TEXT};
     }}
 
     QTableWidget {{
         alternate-background-color: {SURFACE_ALT};
-        gridline-color: #E8EFE8;
-        selection-background-color: #D8F2DE;
+        gridline-color: #EEE2D8;
+        selection-background-color: #F1D9C8;
         selection-color: {TEXT};
         padding: 4px;
     }}
 
     QHeaderView::section {{
-        background: #EFF7F0;
+        background: #F6EEE8;
         color: {TEXT};
         border: none;
         border-bottom: 1px solid {BORDER};
@@ -367,7 +368,7 @@ def build_stylesheet() -> str:
     }}
 
     QPushButton {{
-        background: {PRIMARY_GREEN};
+        background: {PRIMARY_COLOR};
         color: white;
         border: none;
         border-radius: 12px;
@@ -376,12 +377,12 @@ def build_stylesheet() -> str:
     }}
 
     QPushButton:hover {{
-        background: {PRIMARY_GREEN_DARK};
+        background: {PRIMARY_COLOR_DARK};
     }}
 
     QPushButton:disabled {{
-        background: #B9C9BA;
-        color: #F3F7F3;
+        background: #C7B9AD;
+        color: #F8F4F0;
     }}
 
     QPushButton#primaryActionButton {{
@@ -392,14 +393,14 @@ def build_stylesheet() -> str:
     }}
 
     QProgressBar {{
-        background: #ECF2ED;
+        background: #F1E8E0;
         min-height: 20px;
         text-align: center;
         font-weight: 600;
     }}
 
     QProgressBar::chunk {{
-        background: {PRIMARY_GREEN};
+        background: {PRIMARY_COLOR};
         border-radius: 10px;
     }}
 
@@ -411,13 +412,13 @@ def build_stylesheet() -> str:
         width: 16px;
         height: 16px;
         border-radius: 8px;
-        border: 1px solid #9FB69F;
+        border: 1px solid #BFA896;
         background: {SURFACE};
     }}
 
     QCheckBox::indicator:checked {{
-        background: {PRIMARY_GREEN};
-        border-color: {PRIMARY_GREEN_DARK};
+        background: {PRIMARY_COLOR};
+        border-color: {PRIMARY_COLOR_DARK};
     }}
 
     QLabel#mutedText,
@@ -431,14 +432,14 @@ def build_stylesheet() -> str:
     }}
 
     QLabel#logoPreview {{
-        background: #EEF4EE;
+        background: #F3EAE2;
         border: 1px solid {BORDER};
         border-radius: 12px;
         padding: 6px;
     }}
 
     QFrame#brandBanner[tone="brand"] {{
-        background: {PRIMARY_GREEN};
+        background: {PRIMARY_COLOR};
         border: none;
         border-radius: 0;
     }}

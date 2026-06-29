@@ -66,7 +66,8 @@ class FieldCalibrationDialog(QDialog):
 
     def __init__(self, parent=None, video_path: str = "", camera_id: int = 0,
                  frame_index: int = 0, calibration_path: str = "",
-                 video_paths: Optional[Dict[int, str]] = None):
+                 video_paths: Optional[Dict[int, str]] = None,
+                 frame_indices: Optional[Dict[int, int]] = None):
         super().__init__(parent)
         self.setWindowTitle(f"Feldkalibrierung – Kamera {camera_id}")
         self.setMinimumSize(1024, 700)
@@ -79,6 +80,7 @@ class FieldCalibrationDialog(QDialog):
         self._video_path = self._video_paths.get(camera_id, video_path)
         self._camera_id = camera_id
         self._frame_index = frame_index
+        self._frame_indices: Dict[int, int] = frame_indices or {camera_id: frame_index}
         self._calibration_path = calibration_path or os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "data", "field_calibration.json",
@@ -299,7 +301,7 @@ class FieldCalibrationDialog(QDialog):
         new_path = self._video_paths.get(new_cam, "")
         if new_path and new_path != self._video_path:
             self._video_path = new_path
-            self._frame_index = 0
+            self._frame_index = self._frame_indices.get(new_cam, 0)
             self._load_frame()
         elif new_path:
             self._video_path = new_path

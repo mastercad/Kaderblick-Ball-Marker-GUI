@@ -96,3 +96,8 @@ data/
 
 # YOLO-Modelle (große Binärdateien)
 models/*.pt
+
+output/
+runs/
+
+*.pt
