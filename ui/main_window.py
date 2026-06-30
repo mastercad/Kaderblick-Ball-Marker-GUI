@@ -267,6 +267,10 @@ class MainWindow(QMainWindow):
         detect_all_action.triggered.connect(self._detect_all_frames)
         tools_menu.addAction(detect_all_action)
 
+        detect_all_heatmap_action = QAction("Alle Frames erkennen (Heatmap)", self)
+        detect_all_heatmap_action.triggered.connect(self._detect_all_frames_heatmap)
+        tools_menu.addAction(detect_all_heatmap_action)
+
         interpolate_action = QAction("Marker interpolieren", self)
         interpolate_action.setShortcut(QKeySequence("Ctrl+I"))
         interpolate_action.triggered.connect(self._interpolate_all)
@@ -751,6 +755,62 @@ class MainWindow(QMainWindow):
         self._batch_check_timer.timeout.connect(self._check_batch_running)
         self._batch_check_timer.start(500)
 
+    def _detect_all_frames_heatmap(self):
+        """Startet Heatmap+Motion+Tracker-Erkennung auf allen Frames beider Videos."""
+        if not self.left_panel.has_video and not self.right_panel.has_video:
+            self._statusbar.showMessage("Kein Video geladen.", 3000)
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Heatmap-Erkennung – alle Frames")
+        dlg_layout = QVBoxLayout(dlg)
+
+        info = QLabel(
+            "Heatmap-Erkennung mit Bewegungsauswertung und Temporal Tracker starten.\n"
+            "Dies kann je nach Videolänge und Modell mehrere Minuten dauern.\n"
+        )
+        info.setWordWrap(True)
+        dlg_layout.addWidget(info)
+
+        skip_group = QGroupBox("Frames mit diesen Marker-Typen überspringen:")
+        skip_layout = QVBoxLayout(skip_group)
+        cb_manual = QCheckBox("Manuell gesetzte Marker")
+        cb_yolo = QCheckBox("Automatisch erkannte Marker")
+        cb_interp = QCheckBox("Interpolierte Marker")
+        cb_manual.setChecked(True)
+        cb_yolo.setChecked(True)
+        cb_interp.setChecked(True)
+        skip_layout.addWidget(cb_manual)
+        skip_layout.addWidget(cb_yolo)
+        skip_layout.addWidget(cb_interp)
+        dlg_layout.addWidget(skip_group)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        dlg_layout.addWidget(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        skip_types: set[str] = set()
+        if cb_manual.isChecked():
+            skip_types.add("manual")
+        if cb_yolo.isChecked():
+            skip_types.add("yolo")
+        if cb_interp.isChecked():
+            skip_types.add("interpolated")
+
+        self.cancel_batch_btn.setEnabled(True)
+        self.detect_all_btn.setEnabled(False)
+        self.left_panel.detect_all_frames_heatmap(skip_types)
+        self.right_panel.detect_all_frames_heatmap(skip_types)
+        self._batch_check_timer = QTimer(self)
+        self._batch_check_timer.timeout.connect(self._check_batch_running)
+        self._batch_check_timer.start(500)
+
     def _cancel_batch(self):
         """Bricht die laufende Batch-Erkennung ab."""
         self.left_panel.cancel_batch_detection()
@@ -1185,6 +1245,7 @@ class MainWindow(QMainWindow):
                 f"Export erfolgreich!\n\n"
                 f"Ball-Samples: {stats.get('positive', 0)}\n"
                 f"Negativsamples: {stats.get('negative', 0)}\n"
+                f"  aus Ausschlussmarkern: {stats.get('hard_negative', 0)}\n"
                 f"Quell-Frames: {stats.get('source_frames', 0)}\n"
                 f"Train: {stats.get('train', 0)} Samples\n"
                 f"Val: {stats.get('val', 0)} Samples\n"

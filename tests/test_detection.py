@@ -35,21 +35,25 @@ class TestGeometryFilter:
         assert _passes_geometry_filter(100, 100, 120, 120, 1920, 1080) is True
 
     def test_too_small(self):
-        """Zu kleines Objekt (5×5px) → verwerfen."""
-        assert _passes_geometry_filter(100, 100, 105, 105, 1920, 1080) is False
+        """Sehr kleines Objekt unterhalb des Mini-Ball-Passes → verwerfen."""
+        assert _passes_geometry_filter(100, 100, 102, 102, 1920, 1080) is False
 
     def test_too_large(self):
-        """Zu großes Objekt (>15% der kürzeren Kante) → verwerfen."""
-        # 1080 * 0.15 = 162 → eine Box von 200px ist zu groß
-        assert _passes_geometry_filter(100, 100, 300, 300, 1920, 1080) is False
+        """Zu großes Objekt (>35% der kürzeren Kante) → verwerfen."""
+        # 1080 * 0.35 = 378 → eine Box von 500px ist zu groß.
+        assert _passes_geometry_filter(100, 100, 600, 600, 1920, 1080) is False
 
     def test_bad_aspect_ratio(self):
         """Seitenverhältnis > 2.5 (Linie, Reflexionsstreifen) → verwerfen."""
         assert _passes_geometry_filter(100, 100, 110, 200, 1920, 1080) is False
 
     def test_minimum_size_boundary(self):
-        """Genau 8px Box → gerade noch akzeptiert."""
-        assert _passes_geometry_filter(0, 0, 8, 8, 1920, 1080) is True
+        """Genau 3px Box → gerade noch akzeptiert für sehr kleine 4K-Bälle."""
+        assert _passes_geometry_filter(0, 0, 3, 3, 1920, 1080) is True
+
+    def test_near_large_ball_kept(self):
+        """Nahe Bälle dürfen deutlich größer als der alte 15%-Filter sein."""
+        assert _passes_geometry_filter(100, 100, 300, 300, 1920, 1080) is True
 
     def test_zero_size(self):
         """Degenerierte Box → verwerfen."""

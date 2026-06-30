@@ -29,8 +29,6 @@ def _load_markers(json_path: str) -> list[dict]:
         for frame_entry in video_entry.get("frames", []):
             frame_idx = int(frame_entry["frame_index"])
             for marker in frame_entry.get("markers", []):
-                if marker.get("type", "manual") == "exclusion":
-                    continue
                 pos = marker["position"]
                 markers.append({
                     "video_file": video_file,
@@ -38,6 +36,7 @@ def _load_markers(json_path: str) -> list[dict]:
                     "cx": float(pos["x"]),
                     "cy": float(pos["y"]),
                     "radius": float(marker["radius"]),
+                    "type": marker.get("type", "manual"),
                 })
     return markers
 
@@ -125,11 +124,16 @@ def export_heatmap_dataset(
     if not markers:
         raise ValueError(f"Keine Ball-Marker in {json_path} gefunden.")
 
-    by_frame: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    positives_by_frame: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    negatives_by_frame: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for marker in markers:
-        by_frame[(marker["video_file"], marker["frame_index"])].append(marker)
+        key = (marker["video_file"], marker["frame_index"])
+        if marker.get("type") == "exclusion":
+            negatives_by_frame[key].append(marker)
+        else:
+            positives_by_frame[key].append(marker)
 
-    keys = sorted(by_frame.keys())
+    keys = sorted(set(positives_by_frame.keys()) | set(negatives_by_frame.keys()))
     rng = random.Random(seed)
     rng.shuffle(keys)
     val_count = max(1, int(len(keys) * val_split))
@@ -142,6 +146,7 @@ def export_heatmap_dataset(
     stats = {
         "positive": 0,
         "negative": 0,
+        "hard_negative": 0,
         "train": 0,
         "val": 0,
         "source_frames": len(keys),
@@ -165,20 +170,21 @@ def export_heatmap_dataset(
             if video_url not in caps:
                 cap = cv2.VideoCapture(video_path)
                 if not cap.isOpened():
-                    stats["skipped"] += len(by_frame[(video_url, frame_idx)])
+                    stats["skipped"] += len(positives_by_frame[(video_url, frame_idx)])
                     continue
                 caps[video_url] = cap
             cap = caps[video_url]
 
             center_frame = _read_frame(cap, frame_idx)
             if center_frame is None:
-                stats["skipped"] += len(by_frame[(video_url, frame_idx)])
+                stats["skipped"] += len(positives_by_frame[(video_url, frame_idx)])
                 continue
             frame_h, frame_w = center_frame.shape[:2]
             split = "val" if (video_url, frame_idx) in val_keys else "train"
             video_hash = hex(hash(video_url) & 0xFFFFFFFF)[2:]
 
-            markers_on_frame = by_frame[(video_url, frame_idx)]
+            markers_on_frame = positives_by_frame[(video_url, frame_idx)]
+            hard_negatives_on_frame = negatives_by_frame[(video_url, frame_idx)]
             for marker_idx, marker in enumerate(markers_on_frame):
                 ball_x = marker["cx"] * frame_w
                 ball_y = marker["cy"] * frame_h
@@ -210,6 +216,29 @@ def export_heatmap_dataset(
                     has_ball=np.uint8(1),
                 )
                 stats["positive"] += 1
+                stats[split] += 1
+
+            for hard_idx, marker in enumerate(hard_negatives_on_frame):
+                neg_x = marker["cx"] * frame_w
+                neg_y = marker["cy"] * frame_h
+                x1, y1, x2, y2 = _crop_bounds(neg_x, neg_y, frame_w, frame_h, crop_size)
+
+                frames = []
+                fallback_shape = center_frame.shape
+                for offset in frame_offsets:
+                    frame = _read_frame(cap, frame_idx + offset, fallback_shape=fallback_shape)
+                    crop = _resize_to_square(frame[y1:y2, x1:x2], image_size)
+                    frames.append(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+
+                name = f"{video_hash}_{frame_idx:06d}_{hard_idx:02d}_hardneg.npz"
+                np.savez_compressed(
+                    out / "samples" / split / name,
+                    frames=np.stack(frames).astype(np.uint8),
+                    heatmap=np.zeros((image_size, image_size), dtype=np.float16),
+                    has_ball=np.uint8(0),
+                )
+                stats["negative"] += 1
+                stats["hard_negative"] = stats.get("hard_negative", 0) + 1
                 stats[split] += 1
 
             # Hard negatives: field crops without a marked ball.

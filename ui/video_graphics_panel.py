@@ -174,16 +174,17 @@ class VideoGraphicsPanel(QWidget):
         from PySide6.QtCore import QUrl
         path = QUrl(self.player.source().toString()).toLocalFile()
         frame_idx = self.current_frame()
+        anchor = self._nearest_ball_anchor(frame_idx, self.player.source().toString())
         self.status_message.emit("Heatmap-Erkennung läuft …")
 
         import threading
         threading.Thread(
             target=self._detect_ball_heatmap_bg_safe,
-            args=(path, frame_idx, self.player.source().toString()),
+            args=(path, frame_idx, self.player.source().toString(), anchor),
             daemon=True,
         ).start()
 
-    def _detect_ball_heatmap_bg_safe(self, path, frame_idx, video_id):
+    def _detect_ball_heatmap_bg_safe(self, path, frame_idx, video_id, anchor=None):
         import traceback
         try:
             from detection.heatmap_ball_detector import detect_ball_heatmap_in_frame
@@ -194,6 +195,8 @@ class VideoGraphicsPanel(QWidget):
                 field_boundary=self._field_boundary,
                 field_boundary_wh=self._field_boundary_wh,
                 field_margin_px=self._field_margin_px,
+                anchor=anchor,
+                use_motion=True,
             )
             result = [(x, y, r) for x, y, r, _score in detections]
             self._ball_detect_result = (result, frame_idx, video_id)
@@ -204,6 +207,18 @@ class VideoGraphicsPanel(QWidget):
             self._ball_detect_result = (None, frame_idx, video_id)
             from PySide6.QtCore import QMetaObject, Qt as _Qt
             QMetaObject.invokeMethod(self, '_on_ball_detected_slot', _Qt.ConnectionType.QueuedConnection)
+
+    def _nearest_ball_anchor(self, frame_idx: int, video_id: str, window: int = 90):
+        nearest = None
+        nearest_dist = window + 1
+        for marker in self.session.markers:
+            if marker.video_file != video_id or marker.type == "exclusion":
+                continue
+            dist = abs(marker.frame_index - frame_idx)
+            if dist < nearest_dist:
+                nearest = (marker.position[0], marker.position[1])
+                nearest_dist = dist
+        return nearest
 
     def _detect_ball_bg(self, path, frame_idx, fps, video_id):
         """Nicht verwendet – siehe _detect_ball_bg_safe."""
@@ -590,6 +605,50 @@ class VideoGraphicsPanel(QWidget):
             daemon=True,
         ).start()
 
+    def detect_all_frames_heatmap(self, skip_types: set | None = None):
+        """Startet Heatmap+Motion+Tracker-Erkennung auf allen Frames."""
+        if not self.has_video:
+            return
+        if self._batch_running:
+            self.status_message.emit("Batch-Erkennung läuft bereits")
+            return
+        self.pause()
+
+        from detection.heatmap_ball_detector import heatmap_model_available
+        if not heatmap_model_available():
+            self.status_message.emit("Kein Heatmap-Modell vorhanden. Bitte zuerst Heatmap-Modell trainieren.")
+            return
+
+        from PySide6.QtCore import QUrl
+        path = QUrl(self.player.source().toString()).toLocalFile()
+        video_id = self.player.source().toString()
+        total = self.total_frames()
+
+        self._init_batch_lock()
+        if skip_types is None:
+            self._batch_existing_frames = {
+                m.frame_index for m in self.session.markers
+                if m.video_file == video_id and m.type != "exclusion"
+            }
+        else:
+            self._batch_existing_frames = {
+                m.frame_index for m in self.session.markers
+                if m.video_file == video_id and m.type in skip_types
+            }
+
+        self._batch_cancel = False
+        self._batch_running = True
+        with self._batch_lock:
+            self._batch_queue = []
+        self.task_started.emit(self._batch_task_id(), "Heatmap-Erkennung", total, True)
+
+        import threading
+        threading.Thread(
+            target=self._detect_all_heatmap_bg,
+            args=(path, video_id, total),
+            daemon=True,
+        ).start()
+
     def cancel_batch_detection(self):
         """Bricht die laufende Batch-Erkennung ab."""
         if self._batch_running:
@@ -676,6 +735,110 @@ class VideoGraphicsPanel(QWidget):
                 progress = frame_idx + 1
                 excl_info = f", {suppressed} unterdrückt" if suppressed else ""
                 self._batch_progress_data = (progress, total, f"{detected} erkannt, {skipped} übersprungen{excl_info}")
+                QMetaObject.invokeMethod(
+                    self, '_update_batch_status', _Qt.ConnectionType.QueuedConnection
+                )
+
+        self._batch_running = False
+        cancelled = " (abgebrochen)" if self._batch_cancel else ""
+        excl_info = f", {suppressed} unterdrückt" if suppressed else ""
+        self._batch_finish_text = f"{detected} Bälle erkannt, {skipped} übersprungen{excl_info}{cancelled}"
+        self._batch_progress_data = (total, total, self._batch_finish_text)
+        QMetaObject.invokeMethod(
+            self, '_update_batch_status', _Qt.ConnectionType.QueuedConnection
+        )
+        QMetaObject.invokeMethod(
+            self, '_on_batch_done', _Qt.ConnectionType.QueuedConnection
+        )
+
+    def _detect_all_heatmap_bg(self, path, video_id, total):
+        """Hintergrund-Thread: Heatmap+Motion+Tracker auf alle Frames."""
+        from detection.heatmap_ball_detector import detect_ball_heatmap_in_frame
+        from detection.temporal_tracker import TemporalBallTracker
+        from PySide6.QtCore import QMetaObject, Qt as _Qt
+
+        detected = 0
+        skipped = 0
+        suppressed = 0
+        tracker = TemporalBallTracker()
+
+        anchor_map: dict[int, tuple[float, float]] = {}
+        for marker in self.session.markers:
+            if marker.video_file == video_id and marker.type != "exclusion":
+                anchor_map[marker.frame_index] = (marker.position[0], marker.position[1])
+
+        exclusion_list = [
+            (m.frame_index, m.position[0], m.position[1], m.radius)
+            for m in self.session.markers
+            if m.video_file == video_id and m.type == "exclusion"
+        ]
+
+        field_boundary = self._field_boundary
+        field_boundary_wh = self._field_boundary_wh
+        field_margin_px = self._field_margin_px
+        last_anchor: tuple[float, float] | None = None
+
+        for frame_idx in range(total):
+            if self._batch_cancel:
+                break
+
+            if frame_idx in anchor_map:
+                last_anchor = anchor_map[frame_idx]
+
+            if frame_idx in self._batch_existing_frames:
+                skipped += 1
+                continue
+
+            try:
+                detections = detect_ball_heatmap_in_frame(
+                    path,
+                    frame_idx,
+                    max_candidates=8,
+                    field_boundary=field_boundary,
+                    field_boundary_wh=field_boundary_wh,
+                    field_margin_px=field_margin_px,
+                    tracker=tracker,
+                    anchor=last_anchor,
+                    use_motion=True,
+                )
+                selected = tracker.select(detections, frame_idx)
+                tracker.update(selected, frame_idx)
+                result = None
+                if selected is not None:
+                    x, y, radius, _score = selected
+                    result = (x, y, radius)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                tracker.mark_missed()
+                result = None
+
+            if result is not None and exclusion_list:
+                cx, cy, _r = result
+                if self._check_exclusion_list(cx, cy, frame_idx, exclusion_list):
+                    result = None
+                    suppressed += 1
+
+            with self._batch_lock:
+                self._batch_queue.append((result, frame_idx, video_id))
+            if result is not None:
+                detected += 1
+                last_anchor = (result[0], result[1])
+                anchor_map[frame_idx] = last_anchor
+
+            if frame_idx % 5 == 0 or frame_idx == total - 1:
+                QMetaObject.invokeMethod(
+                    self, '_process_batch_queue', _Qt.ConnectionType.QueuedConnection
+                )
+
+            if frame_idx % 10 == 0:
+                progress = frame_idx + 1
+                excl_info = f", {suppressed} unterdrückt" if suppressed else ""
+                self._batch_progress_data = (
+                    progress,
+                    total,
+                    f"{detected} erkannt, {skipped} übersprungen{excl_info}",
+                )
                 QMetaObject.invokeMethod(
                     self, '_update_batch_status', _Qt.ConnectionType.QueuedConnection
                 )

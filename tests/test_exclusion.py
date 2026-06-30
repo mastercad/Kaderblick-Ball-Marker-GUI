@@ -93,7 +93,7 @@ class TestCheckExclusionList:
 class TestIsInExclusionZoneInstance:
     """Prüft die Instanzmethode mit echtem Session-Objekt."""
 
-    def test_instance_exclusion_check(self, qapp):
+    def test_instance_exclusion_check(self):
         """Marker in Session wird korrekt als Ausschlusszone erkannt."""
         from model.session import Session
         from model.marker import Marker
@@ -103,7 +103,8 @@ class TestIsInExclusionZoneInstance:
         excl_marker = Marker("video.mp4", 50, 1667, (0.80, 0.50), 0.05, "exclusion")
         session.add_marker(excl_marker)
 
-        panel = VideoGraphicsPanel(session)
+        panel = VideoGraphicsPanel.__new__(VideoGraphicsPanel)
+        panel.session = session
         # Detektion exakt auf der Ausschlusszone
         assert panel._is_in_exclusion_zone(0.80, 0.50, 50, "video.mp4") is True
         # Detektion weit entfernt
@@ -113,7 +114,7 @@ class TestIsInExclusionZoneInstance:
         # Anderes Video → nicht betroffen
         assert panel._is_in_exclusion_zone(0.80, 0.50, 50, "other.mp4") is False
 
-    def test_ball_marker_not_treated_as_exclusion(self, qapp):
+    def test_ball_marker_not_treated_as_exclusion(self):
         """Ball-Marker (manual/yolo) blockieren keine Detektionen."""
         from model.session import Session
         from model.marker import Marker
@@ -123,7 +124,8 @@ class TestIsInExclusionZoneInstance:
         session.add_marker(Marker("v.mp4", 50, 1667, (0.50, 0.50), 0.05, "manual"))
         session.add_marker(Marker("v.mp4", 51, 1700, (0.50, 0.50), 0.05, "yolo"))
 
-        panel = VideoGraphicsPanel(session)
+        panel = VideoGraphicsPanel.__new__(VideoGraphicsPanel)
+        panel.session = session
         # Ball-Marker sind keine Ausschlusszonen
         assert panel._is_in_exclusion_zone(0.50, 0.50, 50, "v.mp4") is False
         assert panel._is_in_exclusion_zone(0.50, 0.50, 51, "v.mp4") is False

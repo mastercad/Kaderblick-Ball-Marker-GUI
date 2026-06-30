@@ -122,6 +122,7 @@ class HeatmapExportDialog(QDialog):
         self._append(
             f"Fertig: {stats.get('positive', 0)} Ball-Samples, "
             f"{stats.get('negative', 0)} harte Negativsamples, "
+            f"davon {stats.get('hard_negative', 0)} aus Ausschlussmarkern, "
             f"{stats.get('skipped', 0)} übersprungen."
         )
         self._cancel_btn.setEnabled(False)

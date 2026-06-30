@@ -9,6 +9,13 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from detection.motion_candidates import (
+    expected_ball_radius_px,
+    find_motion_candidates,
+    motion_support_score,
+    radius_score,
+)
+from detection.temporal_tracker import TemporalBallTracker
 from shared.app_paths import runtime_path
 from shared.python_runtime import apply_external_python_paths
 
@@ -156,6 +163,9 @@ def detect_ball_heatmap_in_frame(
     field_boundary: Optional[np.ndarray] = None,
     field_boundary_wh: Optional[tuple[int, int]] = None,
     field_margin_px: int = 150,
+    tracker: TemporalBallTracker | None = None,
+    anchor: tuple[float, float] | None = None,
+    use_motion: bool = True,
 ) -> list[tuple[float, float, float, float]]:
     """Erkennt Ballzentren per Heatmap.
 
@@ -177,6 +187,17 @@ def detect_ball_heatmap_in_frame(
 
     h, w = frames[len(frames) // 2].shape[:2]
     tiles = _generate_tiles(w, h, tile_size, overlap)
+    motion_candidates = []
+    if use_motion and len(frames) >= 3:
+        motion_candidates = find_motion_candidates(
+            frames[0],
+            frames[len(frames) // 2],
+            frames[-1],
+            field_boundary=field_boundary,
+            field_boundary_wh=field_boundary_wh,
+            field_margin_px=field_margin_px,
+        )
+
     detections = []
 
     with torch.no_grad():
@@ -199,7 +220,45 @@ def detect_ball_heatmap_in_frame(
             gy = y + (py / max(1, tile_size - 1)) * th
             if not _point_in_field(gx, gy, w, h, field_boundary, field_boundary_wh, field_margin_px):
                 continue
-            detections.append((gx / w, gy / h, 5.0 / min(w, h), score))
+
+            expected_radius = expected_ball_radius_px(gy, h)
+            motion_score = motion_support_score(gx, gy, motion_candidates, expected_radius * 4.0)
+            size_score = radius_score(expected_radius, expected_radius)
+            temporal_score = 0.0
+            nx = gx / w
+            ny = gy / h
+            if tracker is not None:
+                temporal_score = tracker.prediction_score(nx, ny, frame_index)
+            anchor_score = 0.0
+            if anchor is not None:
+                dist = ((nx - anchor[0]) ** 2 + (ny - anchor[1]) ** 2) ** 0.5
+                anchor_score = float(np.exp(-(dist * dist) / (2.0 * 0.07 * 0.07)))
+
+            combined = (
+                0.58 * score
+                + 0.22 * motion_score
+                + 0.12 * temporal_score
+                + 0.06 * anchor_score
+                + 0.02 * size_score
+            )
+            if combined < threshold:
+                continue
+            detections.append((nx, ny, expected_radius / min(w, h), combined))
+
+    # Motion-only candidates keep the detector alive for frames where the ball is
+    # visually tiny but moves plausibly near the current temporal prediction.
+    for candidate in motion_candidates[:20]:
+        nx = candidate.x / w
+        ny = candidate.y / h
+        temporal_score = tracker.prediction_score(nx, ny, frame_index) if tracker is not None else 0.0
+        anchor_score = 0.0
+        if anchor is not None:
+            dist = ((nx - anchor[0]) ** 2 + (ny - anchor[1]) ** 2) ** 0.5
+            anchor_score = float(np.exp(-(dist * dist) / (2.0 * 0.07 * 0.07)))
+        combined = 0.58 * candidate.score + 0.28 * temporal_score + 0.14 * anchor_score
+        if combined >= max(0.28, threshold * 0.82):
+            radius = expected_ball_radius_px(candidate.y, h) / min(w, h)
+            detections.append((nx, ny, radius, combined))
 
     detections.sort(key=lambda item: item[3], reverse=True)
     kept = []
@@ -211,3 +270,42 @@ def detect_ball_heatmap_in_frame(
         if len(kept) >= max_candidates:
             break
     return kept
+
+
+def detect_ball_heatmap_tracked(
+    video_path: str,
+    frame_indices: list[int] | range,
+    model_path: str | os.PathLike = MODEL_PATH,
+    field_boundary: Optional[np.ndarray] = None,
+    field_boundary_wh: Optional[tuple[int, int]] = None,
+    field_margin_px: int = 150,
+    threshold: float = 0.35,
+) -> dict[int, tuple[float, float, float] | None]:
+    """Run heatmap+motion detection over multiple frames with one temporal tracker."""
+    tracker = TemporalBallTracker()
+    results: dict[int, tuple[float, float, float] | None] = {}
+    anchor: tuple[float, float] | None = None
+
+    for frame_index in frame_indices:
+        detections = detect_ball_heatmap_in_frame(
+            video_path,
+            frame_index,
+            model_path=model_path,
+            threshold=threshold,
+            max_candidates=8,
+            field_boundary=field_boundary,
+            field_boundary_wh=field_boundary_wh,
+            field_margin_px=field_margin_px,
+            tracker=tracker,
+            anchor=anchor,
+            use_motion=True,
+        )
+        selected = tracker.select(detections, frame_index)
+        tracker.update(selected, frame_index)
+        if selected is None:
+            results[frame_index] = None
+            continue
+        x, y, radius, _score = selected
+        anchor = (x, y)
+        results[frame_index] = (x, y, radius)
+    return results
