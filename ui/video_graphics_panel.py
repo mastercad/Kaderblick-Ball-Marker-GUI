@@ -63,6 +63,8 @@ class VideoGraphicsPanel(QWidget):
         self._pan_start = QPointF()
         self._highlight_index = -1  # Index für Marker-Zyklen auf aktuellem Frame
         self._highlight_items = []  # temporäre QGraphicsEllipseItems (Highlight-Ringe)
+        self._candidate_items = []  # temporäre Kandidatenringe aus nicht sicherer Erkennung
+        self._candidate_frame: int | None = None
         self._highlight_timer = QTimer(self)
         self._highlight_timer.setSingleShot(True)
         self._highlight_timer.timeout.connect(self._remove_highlight)
@@ -145,6 +147,7 @@ class VideoGraphicsPanel(QWidget):
         if not self.has_video:
             return
         self.pause()
+        self._clear_detection_candidates()
         from PySide6.QtCore import QUrl
         path = QUrl(self.player.source().toString()).toLocalFile()
         frame_idx = self.current_frame()
@@ -157,6 +160,50 @@ class VideoGraphicsPanel(QWidget):
             args=(path, frame_idx, self.fps, self.player.source().toString()),
             daemon=True,
         ).start()
+
+    def detect_ball_heatmap(self):
+        """Heatmap-Erkennung auf dem aktuellen Frame – erstellt Marker."""
+        if not self.has_video:
+            return
+        self.pause()
+        from detection.heatmap_ball_detector import heatmap_model_available
+        if not heatmap_model_available():
+            self.status_message.emit("Kein Heatmap-Modell vorhanden. Bitte zuerst Heatmap-Modell trainieren.")
+            return
+
+        from PySide6.QtCore import QUrl
+        path = QUrl(self.player.source().toString()).toLocalFile()
+        frame_idx = self.current_frame()
+        self.status_message.emit("Heatmap-Erkennung läuft …")
+
+        import threading
+        threading.Thread(
+            target=self._detect_ball_heatmap_bg_safe,
+            args=(path, frame_idx, self.player.source().toString()),
+            daemon=True,
+        ).start()
+
+    def _detect_ball_heatmap_bg_safe(self, path, frame_idx, video_id):
+        import traceback
+        try:
+            from detection.heatmap_ball_detector import detect_ball_heatmap_in_frame
+
+            detections = detect_ball_heatmap_in_frame(
+                path,
+                frame_idx,
+                field_boundary=self._field_boundary,
+                field_boundary_wh=self._field_boundary_wh,
+                field_margin_px=self._field_margin_px,
+            )
+            result = [(x, y, r) for x, y, r, _score in detections]
+            self._ball_detect_result = (result, frame_idx, video_id)
+            from PySide6.QtCore import QMetaObject, Qt as _Qt
+            QMetaObject.invokeMethod(self, '_on_ball_detected_slot', _Qt.ConnectionType.QueuedConnection)
+        except Exception:
+            traceback.print_exc()
+            self._ball_detect_result = (None, frame_idx, video_id)
+            from PySide6.QtCore import QMetaObject, Qt as _Qt
+            QMetaObject.invokeMethod(self, '_on_ball_detected_slot', _Qt.ConnectionType.QueuedConnection)
 
     def _detect_ball_bg(self, path, frame_idx, fps, video_id):
         """Nicht verwendet – siehe _detect_ball_bg_safe."""
@@ -347,32 +394,77 @@ class VideoGraphicsPanel(QWidget):
         """Wird im Main-Thread aufgerufen nach YOLO-Erkennung."""
         if not self.has_video or self.player.source().toString() != video_id:
             return
-        if result is None:
+        if isinstance(result, dict):
+            source = result.get("source", "none")
+            candidates = result.get("candidates", [])
+            if source == "fallback":
+                self._show_detection_candidates(candidates, frame_idx)
+                self.status_message.emit(
+                    f"YOLO fand keinen Ball. {len(candidates)} optische Kandidaten gelb angezeigt."
+                )
+                return
+            result = candidates
+
+        if result is None or result == []:
+            self._clear_detection_candidates()
             self.status_message.emit("Kein Ball erkannt")
             return
-        cx, cy, radius = result
-        # Ausschlusszone prüfen
-        if self._is_in_exclusion_zone(cx, cy, frame_idx, video_id):
-            self.status_message.emit(f"Detektion in Ausschlusszone verworfen (Frame {frame_idx})")
+
+        self._clear_detection_candidates()
+        results = result if isinstance(result, list) else [result]
+        valid_results = []
+        suppressed = 0
+        for cx, cy, radius in results:
+            if self._is_in_exclusion_zone(cx, cy, frame_idx, video_id):
+                suppressed += 1
+                continue
+            if not self.is_inside_field(cx, cy):
+                suppressed += 1
+                continue
+            valid_results.append((cx, cy, radius))
+
+        if not valid_results:
+            detail = f" ({suppressed} verworfen)" if suppressed else ""
+            self.status_message.emit(f"Kein Ball erkannt{detail}")
             return
-        # Feldgrenze prüfen
-        if not self.is_inside_field(cx, cy):
-            self.status_message.emit(
-                f"Detektion außerhalb Feldgrenze verworfen (Frame {frame_idx}, "
-                f"pos=({cx:.3f},{cy:.3f}))")
-            return
+
         from model.marker import Marker
-        # Prüfe ob auf diesem Frame bereits ein Ball-Marker existiert (Ausschluss ignorieren)
-        existing = [m for m in self.markers if m.frame_index == frame_idx and m.type != "exclusion"]
-        if existing:
-            # Vorhandenen Marker aktualisieren
-            m = existing[0]
-            m.position = (cx, cy)
-            m.radius = radius
-            if m in self.marker_items:
-                self._update_marker_item(m, self.marker_items[m])
-            self.status_message.emit(f"Ball erkannt – Marker aktualisiert (Frame {frame_idx})")
-        else:
+
+        existing = [
+            m for m in self.markers
+            if m.frame_index == frame_idx and m.video_file == video_id and m.type != "exclusion"
+        ]
+        used_existing: set[int] = set()
+        created = 0
+        updated = 0
+        kept_manual = 0
+
+        for cx, cy, radius in valid_results:
+            nearest_idx = None
+            nearest_dist = 999.0
+            for idx, marker in enumerate(existing):
+                if idx in used_existing:
+                    continue
+                mx, my = marker.position
+                dist = ((cx - mx) ** 2 + (cy - my) ** 2) ** 0.5
+                threshold = max(radius * 3.0, marker.radius * 3.0, 0.012)
+                if dist <= threshold and dist < nearest_dist:
+                    nearest_idx = idx
+                    nearest_dist = dist
+
+            if nearest_idx is not None:
+                marker = existing[nearest_idx]
+                used_existing.add(nearest_idx)
+                if marker.type == "yolo":
+                    marker.position = (cx, cy)
+                    marker.radius = radius
+                    if marker in self.marker_items:
+                        self._update_marker_item(marker, self.marker_items[marker])
+                    updated += 1
+                else:
+                    kept_manual += 1
+                continue
+
             marker = Marker(
                 video_id, frame_idx,
                 round(frame_idx * self.ms_per_frame),
@@ -384,7 +476,20 @@ class VideoGraphicsPanel(QWidget):
             self._index_add(marker, item)
             if hasattr(self.session, 'add_marker'):
                 self.session.add_marker(marker)
-            self.status_message.emit(f"Ball erkannt – Marker gesetzt (Frame {frame_idx})")
+            created += 1
+
+        parts = []
+        if created:
+            parts.append(f"{created} gesetzt")
+        if updated:
+            parts.append(f"{updated} aktualisiert")
+        if kept_manual:
+            parts.append(f"{kept_manual} bereits manuell markiert")
+        if suppressed:
+            parts.append(f"{suppressed} verworfen")
+        self.status_message.emit(
+            f"Ballerkennung Frame {frame_idx}: " + ", ".join(parts)
+        )
         self._update_marker_visibility(self.current_frame())
         self.markers_changed.emit()
         main_window = self._find_main_window()
@@ -405,6 +510,9 @@ class VideoGraphicsPanel(QWidget):
                 field_boundary=self._field_boundary,
                 field_boundary_wh=self._field_boundary_wh,
                 field_margin_px=self._field_margin_px,
+                return_candidates=True,
+                max_candidates=12,
+                return_details=True,
             )
             print(f"[YOLO] Ergebnis: {result}")
             self._ball_detect_result = (result, frame_idx, video_id)
@@ -852,6 +960,36 @@ class VideoGraphicsPanel(QWidget):
             item.setPen(QPen(QColor(220, 50, 50, 200), 2.5, Qt.PenStyle.DashLine))
         else:
             item.setPen(QPen(Qt.PenStyle.NoPen))
+
+    def _clear_detection_candidates(self):
+        """Entfernt temporäre Vorschlagsringe aus der Ansicht."""
+        for item in self._candidate_items:
+            try:
+                self.scene.removeItem(item)
+            except RuntimeError:
+                pass
+        self._candidate_items = []
+        self._candidate_frame = None
+
+    def _show_detection_candidates(self, candidates, frame_idx: int):
+        """Zeigt unsichere Ballvorschläge als gelbe Ringe, ohne Marker zu speichern."""
+        self._clear_detection_candidates()
+        if not candidates:
+            return
+
+        w, h = self._video_local_size()
+        for i, (cx, cy, radius) in enumerate(candidates, start=1):
+            px = cx * w
+            py = cy * h
+            r = max(radius * min(w, h), 6.0)
+            item = QGraphicsEllipseItem(self.video_item)
+            item.setRect(QRectF(px - r, py - r, 2 * r, 2 * r))
+            item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            item.setPen(QPen(QColor(255, 220, 0, 230), 2.5, Qt.PenStyle.DashLine))
+            item.setZValue(20)
+            item.setToolTip(f"Ballvorschlag {i}: bitte manuell bestätigen, falls korrekt")
+            self._candidate_items.append(item)
+        self._candidate_frame = frame_idx
 
     # ── FPS (delegiert an zentralen FpsDetector) ─────────────────────
 
@@ -1558,6 +1696,8 @@ class VideoGraphicsPanel(QWidget):
 
     def _update_marker_visibility(self, frame):
         """Zeigt nur Marker an, die zum aktuellen Frame gehören (O(1)-Lookup)."""
+        if self._candidate_frame is not None and self._candidate_frame != frame:
+            self._clear_detection_candidates()
         # Vorherigen Frame ausblenden
         if self._last_visible_frame is not None and self._last_visible_frame != frame:
             for _marker, item in self._frame_to_items.get(self._last_visible_frame, []):

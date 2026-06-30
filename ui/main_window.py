@@ -139,11 +139,14 @@ class MainWindow(QMainWindow):
         self._sync_offset_spin.valueChanged.connect(self._on_sync_offset_changed)
         controls.addWidget(self._sync_offset_spin)
 
-        # Werkzeug-Leiste: YOLO + Interpolation
+        # Werkzeug-Leiste: Ball-Erkennung + Interpolation
         tools = QHBoxLayout()
         self.detect_btn = QPushButton("⚽ Ball erkennen (YOLO)")
         self.detect_btn.setToolTip("YOLO-Erkennung auf dem aktuellen Frame beider Videos (Ctrl+D)")
         self.detect_btn.clicked.connect(self._detect_ball_all)
+        self.detect_heatmap_btn = QPushButton("⚽ Ball erkennen (Heatmap)")
+        self.detect_heatmap_btn.setToolTip("Heatmap-Erkennung fuer kleine Baelle mit mehreren Frames")
+        self.detect_heatmap_btn.clicked.connect(self._detect_ball_heatmap_all)
         self.detect_all_btn = QPushButton("🎥 Alle Frames erkennen")
         self.detect_all_btn.setToolTip("YOLO-Erkennung auf allen Frames beider Videos (Ctrl+Shift+D)")
         self.detect_all_btn.clicked.connect(self._detect_all_frames)
@@ -155,6 +158,7 @@ class MainWindow(QMainWindow):
         self.interpolate_btn.setToolTip("Marker zwischen vorhandenen Markern linear interpolieren (Ctrl+I)")
         self.interpolate_btn.clicked.connect(self._interpolate_all)
         tools.addWidget(self.detect_btn, stretch=1)
+        tools.addWidget(self.detect_heatmap_btn, stretch=1)
         tools.addWidget(self.detect_all_btn, stretch=1)
         tools.addWidget(self.cancel_batch_btn)
         tools.addWidget(self.interpolate_btn, stretch=1)
@@ -184,6 +188,11 @@ class MainWindow(QMainWindow):
         self._kf_status_timer = QTimer(self)
         self._kf_status_timer.setSingleShot(True)
         self._kf_status_timer.timeout.connect(lambda: self._kf_status_label.setText(""))
+
+        self._model_status_label = QLabel("")
+        self._model_status_label.setMinimumWidth(180)
+        self._statusbar.addPermanentWidget(self._model_status_label)
+        self._update_model_status()
 
         # ── Fortschrittsanzeige ────────────────────────────────────
         self._progress = ProgressWidget()
@@ -249,6 +258,10 @@ class MainWindow(QMainWindow):
         detect_action.triggered.connect(self._detect_ball_all)
         tools_menu.addAction(detect_action)
 
+        detect_heatmap_action = QAction("Ball erkennen (Heatmap)", self)
+        detect_heatmap_action.triggered.connect(self._detect_ball_heatmap_all)
+        tools_menu.addAction(detect_heatmap_action)
+
         detect_all_action = QAction("Alle Frames erkennen (YOLO)", self)
         detect_all_action.setShortcut(QKeySequence("Ctrl+Shift+D"))
         detect_all_action.triggered.connect(self._detect_all_frames)
@@ -289,9 +302,29 @@ class MainWindow(QMainWindow):
         export_training_action.triggered.connect(self._export_training_data)
         tools_menu.addAction(export_training_action)
 
+        export_heatmap_action = QAction("Heatmap-Trainingsdaten exportieren…", self)
+        export_heatmap_action.triggered.connect(self._export_heatmap_training_data)
+        tools_menu.addAction(export_heatmap_action)
+
+        train_heatmap_action = QAction("Heatmap-Modell trainieren…", self)
+        train_heatmap_action.triggered.connect(self._train_heatmap_model)
+        tools_menu.addAction(train_heatmap_action)
+
         load_model_action = QAction("Eigenes Modell laden…", self)
         load_model_action.triggered.connect(self._load_custom_model)
         tools_menu.addAction(load_model_action)
+
+        use_standard_model_action = QAction("Standardmodell verwenden", self)
+        use_standard_model_action.triggered.connect(self._use_standard_model)
+        tools_menu.addAction(use_standard_model_action)
+
+        use_auto_model_action = QAction("Automatische Modellwahl verwenden", self)
+        use_auto_model_action.triggered.connect(self._use_auto_model_selection)
+        tools_menu.addAction(use_auto_model_action)
+
+        model_status_action = QAction("Aktives Modell anzeigen…", self)
+        model_status_action.triggered.connect(self._show_active_model)
+        tools_menu.addAction(model_status_action)
 
         if sys.platform.startswith("linux"):
             gpu_runtime_action = QAction("GPU-Runtime konfigurieren…", self)
@@ -571,7 +604,57 @@ class MainWindow(QMainWindow):
 
     def _on_panel_status(self, text: str):
         """Status-Meldung von einem Panel (YOLO, Interpolation, etc.)."""
+        if "Modell geladen" in text or "Custom-Modell geladen" in text:
+            self._update_model_status()
         self._statusbar.showMessage(text, 5000)
+
+    def _update_model_status(self):
+        """Aktualisiert die dauerhafte Anzeige des aktuell genutzten YOLO-Modells."""
+        try:
+            from detection.ball_detector import active_model_info
+
+            info = active_model_info(load_if_needed=False)
+            kind = "Eigenes Modell" if info["is_custom"] else "Standardmodell"
+            loaded = "geladen" if info["loaded"] else "wird automatisch genutzt"
+            mode_label = {
+                "auto": "Auto",
+                "standard": "Standard fest",
+                "custom": "Eigenes fest",
+            }.get(info.get("mode", "auto"), "Auto")
+            self._model_status_label.setText(f"Modell: {kind}")
+            self._model_status_label.setToolTip(
+                f"{kind}\n"
+                f"Datei: {info['path']}\n"
+                f"Auswahl: {mode_label}\n"
+                f"Status: {loaded}\n"
+                "Fallback: Standardmodell wird versucht, wenn ein eigenes Modell nichts findet."
+            )
+        except Exception as exc:
+            self._model_status_label.setText("Modell: unbekannt")
+            self._model_status_label.setToolTip(str(exc))
+
+    def _show_active_model(self):
+        """Zeigt Details zum aktuell genutzten oder automatisch gewählten Modell."""
+        from detection.ball_detector import active_model_info
+
+        info = active_model_info(load_if_needed=False)
+        kind = "Eigenes Modell" if info["is_custom"] else "Standardmodell"
+        loaded = "bereits geladen" if info["loaded"] else "wird beim nächsten Erkennen geladen"
+        mode_label = {
+            "auto": "Automatisch",
+            "standard": "Standardmodell fest ausgewählt",
+            "custom": "Eigenes Modell fest ausgewählt",
+        }.get(info.get("mode", "auto"), "Automatisch")
+        QMessageBox.information(
+            self,
+            "Aktives Modell",
+            f"{kind}\n\n"
+            f"Datei:\n{info['path']}\n\n"
+            f"Auswahl: {mode_label}\n"
+            f"Status: {loaded}\n\n"
+            "Wenn ein eigenes Modell aktiv ist und keinen Kandidaten findet, "
+            "versucht die Erkennung zusätzlich das Standardmodell.",
+        )
 
     # ── Fortschrittsanzeige ───────────────────────────────────────────
 
@@ -604,6 +687,11 @@ class MainWindow(QMainWindow):
         """Startet YOLO-Erkennung auf dem aktuellen Frame beider Panels."""
         self.left_panel.detect_ball()
         self.right_panel.detect_ball()
+
+    def _detect_ball_heatmap_all(self):
+        """Startet Heatmap-Erkennung auf dem aktuellen Frame beider Panels."""
+        self.left_panel.detect_ball_heatmap()
+        self.right_panel.detect_ball_heatmap()
 
     def _detect_all_frames(self):
         """Startet YOLO-Erkennung auf allen Frames beider Videos."""
@@ -987,8 +1075,6 @@ class MainWindow(QMainWindow):
     def _export_training_data(self):
         """Exportiert aktuelle Marker als YOLO-Trainingsdaten."""
         from autosave.autosave import DEFAULT_EXPORT_DIR
-        from training.export_training_data import export_yolo_dataset
-
         if not self.session.markers:
             QMessageBox.warning(self, "Trainingsdaten", "Keine Marker vorhanden.\nBitte zuerst Bälle markieren.")
             return
@@ -1007,21 +1093,136 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            stats = export_yolo_dataset(tmp_json, output_dir)
-            QMessageBox.information(
-                self, "Trainingsdaten",
+            from ui.training_export_dialog import TrainingDataExportDialog
+
+            export_dlg = TrainingDataExportDialog(
+                self,
+                json_path=tmp_json,
+                output_dir=output_dir,
+            )
+            export_dlg.exec()
+            if export_dlg.was_cancelled:
+                return
+            if export_dlg.error_message:
+                return
+            stats = export_dlg.stats
+            if not stats:
+                return
+
+            reply = QMessageBox.question(
+                self,
+                "Trainingsdaten",
                 f"Export erfolgreich!\n\n"
-                f"Frames: {stats['total_frames']}\n"
-                f"Marker: {stats['total_markers']}\n"
-                f"Train: {stats['train']} Frames\n"
-                f"Val: {stats['val']} Frames\n\n"
-                f"Zum Trainieren:\n"
-                f"  python -m training.train_model {os.path.join(output_dir, 'dataset.yaml')}")
+                f"Ausschnitte: {stats['total_frames']}\n"
+                f"  mit Ball: {stats.get('positive_crops', 0)}\n"
+                f"  ohne Ball: {stats.get('negative_crops', 0)}\n"
+                f"Quell-Frames: {stats.get('source_frames', 0)}\n"
+                f"Labels: {stats['total_markers']}\n"
+                f"Train: {stats['train']} Ausschnitte\n"
+                f"Val: {stats['val']} Ausschnitte\n\n"
+                f"Möchten Sie jetzt ein Modell mit diesen Daten trainieren?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                from ui.training_dialog import TrainingDialog
+
+                dlg = TrainingDialog(
+                    self,
+                    dataset_yaml=os.path.join(output_dir, "dataset.yaml"),
+                    export_stats=stats,
+                )
+                dlg.exec()
+                self._update_model_status()
         except Exception as e:
             QMessageBox.critical(self, "Fehler", f"Export fehlgeschlagen:\n{e}")
         finally:
             if os.path.isfile(tmp_json):
                 os.remove(tmp_json)
+
+    def _export_heatmap_training_data(self):
+        """Exportiert aktuelle Marker als Heatmap-Trainingsdaten."""
+        from autosave.autosave import DEFAULT_EXPORT_DIR
+        if not self.session.markers:
+            QMessageBox.warning(
+                self,
+                "Heatmap-Trainingsdaten",
+                "Keine Marker vorhanden.\nBitte zuerst Bälle markieren.",
+            )
+            return
+
+        import tempfile
+        tmp_json = os.path.join(tempfile.gettempdir(), "ballmarker_heatmap_export.json")
+        from export.exporter import export_markers as _export
+        _export(self.session.markers, tmp_json)
+
+        output_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Heatmap-Trainingsdaten-Verzeichnis wählen",
+            os.path.join(DEFAULT_EXPORT_DIR, "heatmap_dataset"),
+        )
+        if not output_dir:
+            return
+
+        try:
+            from ui.heatmap_export_dialog import HeatmapExportDialog
+
+            export_dlg = HeatmapExportDialog(
+                self,
+                json_path=tmp_json,
+                output_dir=output_dir,
+            )
+            export_dlg.exec()
+            if export_dlg.was_cancelled or export_dlg.error_message:
+                return
+            stats = export_dlg.stats
+            if not stats:
+                return
+
+            reply = QMessageBox.question(
+                self,
+                "Heatmap-Trainingsdaten",
+                f"Export erfolgreich!\n\n"
+                f"Ball-Samples: {stats.get('positive', 0)}\n"
+                f"Negativsamples: {stats.get('negative', 0)}\n"
+                f"Quell-Frames: {stats.get('source_frames', 0)}\n"
+                f"Train: {stats.get('train', 0)} Samples\n"
+                f"Val: {stats.get('val', 0)} Samples\n"
+                f"Bildgröße: {stats.get('image_size', 0)} px\n\n"
+                f"Möchten Sie jetzt das Heatmap-Modell mit diesen Daten trainieren?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                from ui.heatmap_training_dialog import HeatmapTrainingDialog
+
+                dlg = HeatmapTrainingDialog(self, dataset_dir=output_dir, export_stats=stats)
+                dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", f"Heatmap-Export fehlgeschlagen:\n{e}")
+        finally:
+            if os.path.isfile(tmp_json):
+                os.remove(tmp_json)
+
+    def _train_heatmap_model(self):
+        """Startet Heatmap-Training für einen vorhandenen Heatmap-Datensatz."""
+        from autosave.autosave import DEFAULT_EXPORT_DIR
+
+        dataset_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Heatmap-Trainingsdaten wählen",
+            os.path.join(DEFAULT_EXPORT_DIR, "heatmap_dataset"),
+        )
+        if not dataset_dir:
+            return
+
+        try:
+            from ui.heatmap_training_dialog import HeatmapTrainingDialog
+
+            dlg = HeatmapTrainingDialog(self, dataset_dir=dataset_dir)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler", f"Heatmap-Training konnte nicht gestartet werden:\n{e}")
 
     def _load_custom_model(self):
         """Lädt ein benutzerdefiniertes YOLO-Modell (.pt)."""
@@ -1037,9 +1238,37 @@ class MainWindow(QMainWindow):
                 self, "Modell geladen",
                 f"Custom-Modell geladen:\n{os.path.basename(path)}\n\n"
                 f"YOLO-Erkennung nutzt jetzt dieses Modell.")
+            self._update_model_status()
             self._statusbar.showMessage(f"Custom-Modell: {os.path.basename(path)}", 5000)
         except Exception as e:
             QMessageBox.critical(self, "Fehler", f"Modell konnte nicht geladen werden:\n{e}")
+
+    def _use_standard_model(self):
+        """Schaltet dauerhaft auf das robuste Standardmodell zurück."""
+        from detection.ball_detector import use_standard_model
+
+        use_standard_model()
+        self._update_model_status()
+        QMessageBox.information(
+            self,
+            "Standardmodell aktiv",
+            "Die YOLO-Erkennung nutzt jetzt dauerhaft das Standardmodell.\n\n"
+            "Das ist sinnvoll, wenn ein testweise trainiertes eigenes Modell "
+            "zu wenige Daten hatte und nichts mehr erkennt.",
+        )
+
+    def _use_auto_model_selection(self):
+        """Aktiviert wieder die automatische Modellwahl."""
+        from detection.ball_detector import use_auto_model_selection
+
+        use_auto_model_selection()
+        self._update_model_status()
+        QMessageBox.information(
+            self,
+            "Automatische Modellwahl",
+            "Die App nutzt wieder automatisch ein eigenes Modell, falls "
+            "ballmarker_custom.pt vorhanden ist; sonst das Standardmodell.",
+        )
 
     def _configure_gpu_runtime(self):
         """Konfiguriert externe site-packages, z. B. ein CUDA-faehiges venv."""

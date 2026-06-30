@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 
@@ -41,21 +40,23 @@ def train(
         name: Name des Trainings-Runs.
         device: CUDA-Device ('0', 'cpu', etc.). None = auto.
     """
+    from shared.app_paths import runtime_path
+    from shared.python_runtime import apply_external_python_paths
+
+    apply_external_python_paths()
     from ultralytics import YOLO
 
     # Basis-Modell bestimmen
     if base_model is None:
-        model_dir = Path(__file__).resolve().parent.parent / "models"
+        model_dir = runtime_path("models")
         base_model = str(model_dir / "yolo11l.pt")
         if not os.path.isfile(base_model):
-            print(f"[ERROR] Basis-Modell nicht gefunden: {base_model}")
-            print("        Lade es z.B. mit: yolo detect predict model=yolo11l.pt")
-            sys.exit(1)
+            raise FileNotFoundError(
+                f"Basis-Modell nicht gefunden: {base_model}"
+            )
 
     if not os.path.isfile(dataset_yaml):
-        print(f"[ERROR] Dataset nicht gefunden: {dataset_yaml}")
-        print("        Erst exportieren: python -m training.export_training_data <ballmarker.json>")
-        sys.exit(1)
+        raise FileNotFoundError(f"Dataset nicht gefunden: {dataset_yaml}")
 
     print(f"\n{'='*60}")
     print(f"YOLO Fine-Tuning")
@@ -108,6 +109,7 @@ def train(
 
     # Bestes Modell kopieren
     best_pt = Path(project) / name / "weights" / "best.pt"
+    target = None
     if best_pt.is_file():
         os.makedirs(output_dir, exist_ok=True)
         target = Path(output_dir) / "ballmarker_custom.pt"
@@ -123,7 +125,11 @@ def train(
     else:
         print(f"[WARN] Bestes Modell nicht gefunden unter {best_pt}")
 
-    return results
+    return {
+        "results": results,
+        "best_model": str(target) if target is not None else "",
+        "run_dir": str(Path(project) / name),
+    }
 
 
 def main():

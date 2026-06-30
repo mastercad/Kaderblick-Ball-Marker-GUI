@@ -93,6 +93,8 @@ dist/
 
 # Laufzeitdaten (Autosave, Exports, Kalibrierung)
 data/
+model_selection.json
+runtime_config.json
 
 # YOLO-Modelle (große Binärdateien)
 models/*.pt
